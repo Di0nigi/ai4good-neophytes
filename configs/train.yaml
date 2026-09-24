@@ -21,9 +21,9 @@ exp_name: ${now:%Y%m%d}_${now:%H%M%S.%f}_${data.data_name}_${model.name}_${data.
 pl_seed: 42               # False or a seed number
 deterministic_train: False  # True forces deterministic kernels (slower)
 
-# # Logging: 'wandb' (needs a Weights & Biases account: wandb login) or 'csv'
+# # Logging: 'wandb' (needs a Weights & Biases account: run wandb login once) or 'csv'
 # # (metrics.csv inside the run directory, no account needed).
-logger: csv
+logger: wandb
 log_name: ai4good-neophytes  # W&B project name
 
 log_dir: lightning_logs
