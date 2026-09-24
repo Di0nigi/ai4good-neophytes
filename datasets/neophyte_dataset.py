@@ -19,6 +19,11 @@ from utils.utils import extract_dataset_name
 
 warnings.filterwarnings('ignore', category=NotGeoreferencedWarning)
 
+# OpenCV's own thread pool does not survive the fork into DataLoader workers: with
+# some builds the first cv2 call in a worker hangs or segfaults. The workers already
+# parallelise the loading, so OpenCV runs single-threaded.
+cv2.setNumThreads(0)
+
 DEFAULT_TILE_GSD_MM = 2.34  # median over the drone tiles; fallback for non-georeferenced input
 
 
