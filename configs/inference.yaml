@@ -10,7 +10,7 @@ out_dir: inference   # output GeoTiffs land in <out_dir>/<exp_name>/
 data:
   # # Full orthophotos to predict (not tiles).
   image_dir:
-    - '../data/Neophytes/2024/Basel_1_2/2024_06_25_Basel_1_2.tif'
+    - '../../data/Neophytes/2024/Basel_1_2/2024_06_25_Basel_1_2.tif'
 
   patch_size: 1024
   patch_overlap: 128  # must be even; larger = smoother borders, more patches

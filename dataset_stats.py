@@ -12,7 +12,7 @@ is empty orthophoto margin.
 the ``max_nodata_frac`` filter (configured as ``dataset_stats`` in
 configs/data/data.yaml), so it has to be regenerated whenever tiles are added.
 
-    python dataset_stats.py                                  # ../data/Neophytes
+    python dataset_stats.py                                  # ../../../../data/Neophytes
     python dataset_stats.py --data-root ../data/Neophytes --sanity-run
 
 Expected layout::
@@ -183,7 +183,7 @@ def collect_stats(base_dir, out_file, sanity_run=False, max_images_per_split=10)
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--data-root", default="../data/Neophytes",
+    ap.add_argument("--data-root", default="../../data/Neophytes",
                     help="dataset root holding <year>/<site>/<split>/ (default: %(default)s)")
     ap.add_argument("--out", default=None,
                     help="output CSV (default: <data-root>/stats_imagewise.csv). It belongs "
