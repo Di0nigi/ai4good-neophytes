@@ -1,18 +1,18 @@
 import os
 import re
+import warnings
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional, Tuple
+
 import cv2
-import torch
-import rasterio
 import numpy as np
 import pandas as pd
-import warnings
-
-from concurrent.futures import ThreadPoolExecutor
-from torch.utils.data import Dataset
+import rasterio
+from albumentations import Compose, Normalize
 from omegaconf import ListConfig
 from rasterio.errors import NotGeoreferencedWarning
-from albumentations import Compose, Normalize
-from typing import Tuple, Optional
+from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from utils.utils import extract_dataset_name
@@ -110,11 +110,15 @@ class NeophyteDataset(Dataset):
         # # Load dataset stats and filter it by images to be used (image_dirs)
         self.stats_df = None
         if self.dataset_stats is not None:
+            stats_path = Path(self.dataset_stats).resolve()
             self.stats_df = pd.read_csv(self.dataset_stats)
-        
+            self.stats_df["img_path"] = self.stats_df["img_path"].apply(
+                lambda p: str((stats_path.parent / p).resolve()) if pd.notna(p) else p
+            )
             # Normalize paths to avoid mismatches
             self.stats_df["img_path"] = self.stats_df["img_path"].apply(os.path.normpath)
             image_files_norm = [os.path.normpath(p) for p in self.image_files]
+            image_files_norm = [os.path.abspath(p) for p in image_files_norm]
         
             # Filter CSV to current split
             self.stats_df = self.stats_df[
