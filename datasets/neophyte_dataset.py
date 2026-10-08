@@ -17,19 +17,21 @@ from tqdm import tqdm
 
 from utils.utils import extract_dataset_name
 
-warnings.filterwarnings('ignore', category=NotGeoreferencedWarning)
+warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
 
 # OpenCV's own thread pool does not survive the fork into DataLoader workers: with
 # some builds the first cv2 call in a worker hangs or segfaults. The workers already
 # parallelise the loading, so OpenCV runs single-threaded.
 cv2.setNumThreads(0)
 
-DEFAULT_TILE_GSD_MM = 2.34  # median over the drone tiles; fallback for non-georeferenced input
+DEFAULT_TILE_GSD_MM = (
+    2.34  # median over the drone tiles; fallback for non-georeferenced input
+)
 
 
 def _tile_month(path):
     """Acquisition month from the tile filename (YYYY_MM_DD_...), else None."""
-    m = re.search(r'(?:^|[/_])(\d{4})_(\d{2})_\d{2}_', os.path.basename(str(path)))
+    m = re.search(r"(?:^|[/_])(\d{4})_(\d{2})_\d{2}_", os.path.basename(str(path)))
     return int(m.group(2)) if m else None
 
 
@@ -43,13 +45,46 @@ def _tile_gsd_mm(src):
 
 
 class NeophyteDataset(Dataset):
-    def __init__(self, image_dirs, classes, transform=None, dsm_transform=None, ndsm_transform=None, dataset_stats=None, geo=False, weighted_sampling=None, cap_quantile=None, lift_quantile=None, bg_fraction=None, min_strat_images=10, value_mapping=None, ignore_index=-1, load_auxiliary=False, load_dsm=False, load_dtm=False, load_ndsm=False, few_shot_k=None, few_shot_mode='max_px_site_pheno', few_shot_bg_k=100, max_nodata_frac=None, load_into_ram=False, preload_workers=None, return_dsm_dtm=False):
-        self.image_dirs = image_dirs if isinstance(image_dirs, ListConfig) or isinstance(image_dirs, list) else [image_dirs]
+    def __init__(
+        self,
+        image_dirs,
+        classes,
+        transform=None,
+        dsm_transform=None,
+        ndsm_transform=None,
+        dataset_stats=None,
+        geo=False,
+        weighted_sampling=None,
+        cap_quantile=None,
+        lift_quantile=None,
+        bg_fraction=None,
+        min_strat_images=10,
+        value_mapping=None,
+        ignore_index=-1,
+        load_auxiliary=False,
+        load_dsm=False,
+        load_dtm=False,
+        load_ndsm=False,
+        few_shot_k=None,
+        few_shot_mode="max_px_site_pheno",
+        few_shot_bg_k=100,
+        max_nodata_frac=None,
+        load_into_ram=False,
+        preload_workers=None,
+        return_dsm_dtm=False,
+    ):
+        self.image_dirs = (
+            image_dirs
+            if isinstance(image_dirs, ListConfig) or isinstance(image_dirs, list)
+            else [image_dirs]
+        )
         self.classes = classes
         self.num_classes = len(classes)
         self.transform = transform
-        self.dsm_transform = dsm_transform # one (identical) transform for DSM and DTM
-        self.ndsm_transform = ndsm_transform # separate transform for nDSM (= DSM - DTM)
+        self.dsm_transform = dsm_transform  # one (identical) transform for DSM and DTM
+        self.ndsm_transform = (
+            ndsm_transform  # separate transform for nDSM (= DSM - DTM)
+        )
         self.dataset_stats = dataset_stats
         self.geo = geo
         self.weighted_sampling = weighted_sampling
@@ -62,13 +97,15 @@ class NeophyteDataset(Dataset):
         if load_ndsm:
             self.load_dsm = True
             self.load_dtm = True
-        self.return_dsm_dtm = return_dsm_dtm and load_ndsm  # only meaningful when ndsm is loaded
-        self.few_shot_k = few_shot_k # any number or None (default: None -> full set) (only neophyte classes)
+        self.return_dsm_dtm = (
+            return_dsm_dtm and load_ndsm
+        )  # only meaningful when ndsm is loaded
+        self.few_shot_k = few_shot_k  # any number or None (default: None -> full set) (only neophyte classes)
         self.few_shot_mode = few_shot_mode
-        self.few_shot_bg_k = few_shot_bg_k # number of fewshot background samples
+        self.few_shot_bg_k = few_shot_bg_k  # number of fewshot background samples
         self.load_into_ram = load_into_ram
         self.preload_workers = preload_workers
-        
+
         # # Collect all image files and their corresponding mask files
         self.image_files = []
         self.mask_files = []
@@ -77,36 +114,74 @@ class NeophyteDataset(Dataset):
         for image_dir in self.image_dirs:
             images_subdir = os.path.join(image_dir, "images")
             for root, _, files in sorted(os.walk(images_subdir)):
-                self.image_files.extend(sorted([os.path.join(root, f) for f in files if f.lower().endswith(('.tif', '.png', '.jpg'))]))
+                self.image_files.extend(
+                    sorted(
+                        [
+                            os.path.join(root, f)
+                            for f in files
+                            if f.lower().endswith((".tif", ".png", ".jpg"))
+                        ]
+                    )
+                )
             masks_subdir = os.path.join(image_dir, "masks_prep")
             if not os.path.isdir(masks_subdir):
                 masks_subdir = os.path.join(image_dir, "labels")
             for root, _, files in sorted(os.walk(masks_subdir)):
-                self.mask_files.extend(sorted([os.path.join(root, f) for f in files if f.lower().endswith(('.tif', '.png'))]))
+                self.mask_files.extend(
+                    sorted(
+                        [
+                            os.path.join(root, f)
+                            for f in files
+                            if f.lower().endswith((".tif", ".png"))
+                        ]
+                    )
+                )
             if self.load_dsm:
                 dsm_subdir = os.path.join(image_dir, "dsm")
                 for root, _, files in sorted(os.walk(dsm_subdir)):
-                    self.dsm_files.extend(sorted([os.path.join(root, f) for f in files if f.lower().endswith('.tif')]))
+                    self.dsm_files.extend(
+                        sorted(
+                            [
+                                os.path.join(root, f)
+                                for f in files
+                                if f.lower().endswith(".tif")
+                            ]
+                        )
+                    )
             if self.load_dtm:
                 dtm_subdir = os.path.join(image_dir, "dtm")
                 for root, _, files in sorted(os.walk(dtm_subdir)):
-                    self.dtm_files.extend(sorted([os.path.join(root, f) for f in files if f.lower().endswith('.tif')]))
-        
+                    self.dtm_files.extend(
+                        sorted(
+                            [
+                                os.path.join(root, f)
+                                for f in files
+                                if f.lower().endswith(".tif")
+                            ]
+                        )
+                    )
+
         # # Ensure the number of images and masks are the same
-        assert len(self.image_files) == len(self.mask_files), "Number of images and masks must be the same."
-        
+        assert len(self.image_files) == len(self.mask_files), (
+            "Number of images and masks must be the same."
+        )
+
         # stats_names in class index order
         self.stats_names = [classes[i]["stats_name"] for i in sorted(classes.keys())]
-        
+
         # background stats name
         self.background_stats_name = classes[0]["stats_name"]
-        
+
         # neophytes only
-        self.neophytes_stats_names = [s for s in self.stats_names if s != self.background_stats_name]
-        
+        self.neophytes_stats_names = [
+            s for s in self.stats_names if s != self.background_stats_name
+        ]
+
         # pixel columns in stats CSV
-        self.class_px_cols = [class_px_col(stats_name) for stats_name in self.stats_names]
-        
+        self.class_px_cols = [
+            class_px_col(stats_name) for stats_name in self.stats_names
+        ]
+
         # # Load dataset stats and filter it by images to be used (image_dirs)
         self.stats_df = None
         if self.dataset_stats is not None:
@@ -116,18 +191,25 @@ class NeophyteDataset(Dataset):
                 lambda p: str((stats_path.parent / p).resolve()) if pd.notna(p) else p
             )
             # Normalize paths to avoid mismatches
-            self.stats_df["img_path"] = self.stats_df["img_path"].apply(os.path.normpath)
+            self.stats_df["img_path"] = self.stats_df["img_path"].apply(
+                os.path.normpath
+            )
             image_files_norm = [os.path.normpath(p) for p in self.image_files]
             image_files_norm = [os.path.abspath(p) for p in image_files_norm]
-        
+
+            missing_paths = self.stats_df.loc[
+                ~self.stats_df["img_path"].isin(image_files_norm), "img_path"
+            ]
+
+            print(missing_paths)
             # Filter CSV to current split
             self.stats_df = self.stats_df[
                 self.stats_df["img_path"].isin(image_files_norm)
             ].copy()
-        
+
             # Ensure same ordering as image_files
             self.stats_df = self.stats_df.set_index("img_path").loc[image_files_norm]
-            
+
             # --- remove images w/o a single pixel in any valid class ---
             total_px = self.stats_df[self.class_px_cols].sum(axis=1)
             valid_mask = total_px > 0
@@ -135,7 +217,9 @@ class NeophyteDataset(Dataset):
             if not valid_mask.all():
                 removed_paths = self.stats_df.index[~valid_mask].tolist()
 
-                print(f"\nFiltering {len(removed_paths)} images w/o a single pixel in any valid class:")
+                print(
+                    f"\nFiltering {len(removed_paths)} images w/o a single pixel in any valid class:"
+                )
                 for path in removed_paths:
                     print(f"  removed: {path}")
 
@@ -146,33 +230,45 @@ class NeophyteDataset(Dataset):
             # Real labels are the scarce resource here, so they always win; the
             # filter only thins out the background pool.
             if max_nodata_frac is not None:
-                labelled = self.stats_df[[class_px_col(s) for s in
-                                          self.neophytes_stats_names]].sum(axis=1) > 0
+                labelled = (
+                    self.stats_df[
+                        [class_px_col(s) for s in self.neophytes_stats_names]
+                    ].sum(axis=1)
+                    > 0
+                )
                 edge = self._nodata_frac() > max_nodata_frac
                 keep = labelled | ~edge
-                print(f"Dropping {int((~keep).sum())} of {len(keep)} tiles with "
-                      f"nodata_frac > {max_nodata_frac} (orthophoto edges); "
-                      f"kept {int((edge & labelled).sum())} edge tiles that carry real labels")
+                print(
+                    f"Dropping {int((~keep).sum())} of {len(keep)} tiles with "
+                    f"nodata_frac > {max_nodata_frac} (orthophoto edges); "
+                    f"kept {int((edge & labelled).sum())} edge tiles that carry real labels"
+                )
                 self._filter_by(keep)
 
             assert len(self.stats_df) == len(self.image_files), (
                 "Filtered dataset_stats does not match dataset length."
             )
-        
+
         # # optional few-shot subset of the split
         if few_shot_k is not None:
             self.apply_few_shot(few_shot_k, few_shot_mode, few_shot_bg_k=few_shot_bg_k)
-        
+
         # # Calculate sample weights
         self.sample_weights = None
         if weighted_sampling:
-            self.sample_weights = self.calculate_sample_weights(weighted_sampling=weighted_sampling, cap_quantile=cap_quantile, lift_quantile=lift_quantile, bg_fraction=bg_fraction, min_strat_images=min_strat_images)
+            self.sample_weights = self.calculate_sample_weights(
+                weighted_sampling=weighted_sampling,
+                cap_quantile=cap_quantile,
+                lift_quantile=lift_quantile,
+                bg_fraction=bg_fraction,
+                min_strat_images=min_strat_images,
+            )
 
         # # set dsm noDataValue and normalization mean
         self.dsm_noDataValue = -32767
         if dsm_transform:
             self.dsm_mean, _ = get_normalize_params(dsm_transform)
-            
+
         # # preload into RAM
         self.images_ram = None
         self.masks_ram = None
@@ -182,11 +278,10 @@ class NeophyteDataset(Dataset):
         self.dsm_ram = None
         self.dtm_ram = None
         self.ndsm_ram = None
-        
+
         if self.load_into_ram:
             self._preload_data()
-    
-    
+
     def _nodata_frac(self):
         """Per-image fraction of empty (orthophoto-edge) pixels, from the stats CSV."""
         if "nodata_px" not in self.stats_df.columns:
@@ -196,18 +291,16 @@ class NeophyteDataset(Dataset):
             )
         return self.stats_df["nodata_px"] / self.stats_df["total_px"].clip(lower=1)
 
-
     def _filter_by(self, keep):
         """Apply a boolean row mask to stats_df and every parallel file list."""
         idx = np.where(np.asarray(keep))[0]
         self.stats_df = self.stats_df.loc[keep]
         self.image_files = [self.image_files[i] for i in idx]
-        self.mask_files  = [self.mask_files[i]  for i in idx]
+        self.mask_files = [self.mask_files[i] for i in idx]
         if self.load_dsm:
             self.dsm_files = [self.dsm_files[i] for i in idx]
         if self.load_dtm:
             self.dtm_files = [self.dtm_files[i] for i in idx]
-
 
     def apply_few_shot(
         self,
@@ -216,10 +309,9 @@ class NeophyteDataset(Dataset):
         few_shot_bg_k=50,
     ):
         selected = set()
-    
+
         # --- per-class few-shot selection ---
         for class_name in self.neophytes_stats_names:
-            
             idxs = select_few_shot_for_class(
                 df=self.stats_df,
                 class_name=class_name,
@@ -227,23 +319,22 @@ class NeophyteDataset(Dataset):
                 mode=few_shot_mode,
             )
             selected.update(idxs)
-    
+
         # --- optional background-only sampling ---
         if few_shot_bg_k > 0:
             bg_col = f"only_{self.background_stats_name}"
             bg_candidates = self.stats_df[
-                (self.stats_df[bg_col] == 1) &
-                (~self.stats_df.index.isin(selected))
+                (self.stats_df[bg_col] == 1) & (~self.stats_df.index.isin(selected))
             ]
-    
+
             if not bg_candidates.empty:
                 bg_selected = bg_candidates.sample(
                     n=min(few_shot_bg_k, len(bg_candidates)),
                     replace=False,
                 ).index.tolist()
-    
+
                 selected.update(bg_selected)
-    
+
         # --- filter dataset (file lists and stats_df MUST stay in the same order,
         #     otherwise sample_weights get mapped to the wrong images) ---
         selected = sorted(selected)
@@ -252,12 +343,11 @@ class NeophyteDataset(Dataset):
         self.stats_df = self.stats_df.loc[selected]
 
         self.image_files = [self.image_files[i] for i in pos]
-        self.mask_files  = [self.mask_files[i]  for i in pos]
+        self.mask_files = [self.mask_files[i] for i in pos]
         if self.load_dsm:
             self.dsm_files = [self.dsm_files[i] for i in pos]
         if self.load_dtm:
             self.dtm_files = [self.dtm_files[i] for i in pos]
-
 
     def calculate_sample_weights(
         self,
@@ -292,8 +382,12 @@ class NeophyteDataset(Dataset):
             weighted_sampling = "inverse"
 
         _PHENO_MODES = {
-            "inverse_pheno", "log_inverse_pheno", "power_inverse_pheno",
-            "inverse_image_pheno", "log_inverse_image_pheno", "power_inverse_image_pheno",
+            "inverse_pheno",
+            "log_inverse_pheno",
+            "power_inverse_pheno",
+            "inverse_image_pheno",
+            "log_inverse_image_pheno",
+            "power_inverse_image_pheno",
         }
         is_pheno = weighted_sampling in _PHENO_MODES
 
@@ -308,9 +402,20 @@ class NeophyteDataset(Dataset):
                 if f"{pheno}_{class_name}_px" in self.stats_df.columns
             ]
             # split into valid (>= min_strat_images) and small (excluded from stratification)
-            group_counts = {col: int((self.stats_df[col] > 0).sum()) for _, _, col in all_pheno_groups}
-            known_pheno_groups = [(cn, ph, col) for cn, ph, col in all_pheno_groups if group_counts[col] >= min_strat_images]
-            small_pheno_groups  = [(cn, ph, col) for cn, ph, col in all_pheno_groups if group_counts[col] <  min_strat_images]
+            group_counts = {
+                col: int((self.stats_df[col] > 0).sum())
+                for _, _, col in all_pheno_groups
+            }
+            known_pheno_groups = [
+                (cn, ph, col)
+                for cn, ph, col in all_pheno_groups
+                if group_counts[col] >= min_strat_images
+            ]
+            small_pheno_groups = [
+                (cn, ph, col)
+                for cn, ph, col in all_pheno_groups
+                if group_counts[col] < min_strat_images
+            ]
             group_cols = [bg_col] + [col for _, _, col in known_pheno_groups]
         else:
             group_cols = self.class_px_cols
@@ -325,20 +430,37 @@ class NeophyteDataset(Dataset):
         base[base == 0] = 1.0
 
         # --- raw group weights ---
-        if weighted_sampling in ("inverse", "inverse_image", "inverse_pheno", "inverse_image_pheno"):
+        if weighted_sampling in (
+            "inverse",
+            "inverse_image",
+            "inverse_pheno",
+            "inverse_image_pheno",
+        ):
             group_weights = 1.0 / base
-        elif weighted_sampling in ("log_inverse", "log_inverse_image", "log_inverse_pheno", "log_inverse_image_pheno"):
+        elif weighted_sampling in (
+            "log_inverse",
+            "log_inverse_image",
+            "log_inverse_pheno",
+            "log_inverse_image_pheno",
+        ):
             group_weights = 1.0 / np.log1p(base)
-        elif weighted_sampling in ("power_inverse", "power_inverse_image", "power_inverse_pheno", "power_inverse_image_pheno"):
+        elif weighted_sampling in (
+            "power_inverse",
+            "power_inverse_image",
+            "power_inverse_pheno",
+            "power_inverse_image_pheno",
+        ):
             group_weights = (1.0 / base) ** beta
         else:
             raise ValueError(f"Unknown weighted_sampling mode: {weighted_sampling}")
 
         # --- cap and lift neophyte weights (quantiles computed on raw neo_w) ---
         neo_w = group_weights[1:].copy()
-        q_cap  = np.quantile(neo_w, cap_quantile)  if cap_quantile  is not None else np.inf
-        q_lift = np.quantile(neo_w, lift_quantile) if lift_quantile is not None else -np.inf
-        neo_w  = np.clip(neo_w, q_lift, q_cap)
+        q_cap = np.quantile(neo_w, cap_quantile) if cap_quantile is not None else np.inf
+        q_lift = (
+            np.quantile(neo_w, lift_quantile) if lift_quantile is not None else -np.inf
+        )
+        neo_w = np.clip(neo_w, q_lift, q_cap)
 
         # --- per-sample weights for neophyte-containing images (known phenology) ---
         neo_presence = presence[:, 1:]
@@ -352,7 +474,11 @@ class NeophyteDataset(Dataset):
             class_min_weight = {}
             class_max_weight = {}
             for class_name in self.neophytes_stats_names:
-                indices = [i for i, (cn, _, _) in enumerate(known_pheno_groups) if cn == class_name]
+                indices = [
+                    i
+                    for i, (cn, _, _) in enumerate(known_pheno_groups)
+                    if cn == class_name
+                ]
                 if indices:
                     class_min_weight[class_name] = float(neo_w[indices].min())
                     class_max_weight[class_name] = float(neo_w[indices].max())
@@ -364,19 +490,28 @@ class NeophyteDataset(Dataset):
                 if f"unknown_{class_name}_px" in self.stats_df.columns
             ]
             if unknown_cols:
-                presence_unknown = self.stats_df[[col for _, col in unknown_cols]].to_numpy() > 0
+                presence_unknown = (
+                    self.stats_df[[col for _, col in unknown_cols]].to_numpy() > 0
+                )
                 for i in range(len(sample_weights)):
                     for j, (class_name, _) in enumerate(unknown_cols):
                         if presence_unknown[i, j] and class_name in class_min_weight:
-                            sample_weights[i] = max(sample_weights[i], class_min_weight[class_name])
+                            sample_weights[i] = max(
+                                sample_weights[i], class_min_weight[class_name]
+                            )
 
             # small groups (< min_strat_images): max weight of class (treat as rare)
             if small_pheno_groups:
-                presence_small = self.stats_df[[col for _, _, col in small_pheno_groups]].to_numpy() > 0
+                presence_small = (
+                    self.stats_df[[col for _, _, col in small_pheno_groups]].to_numpy()
+                    > 0
+                )
                 for i in range(len(sample_weights)):
                     for j, (class_name, _, _) in enumerate(small_pheno_groups):
                         if presence_small[i, j] and class_name in class_max_weight:
-                            sample_weights[i] = max(sample_weights[i], class_max_weight[class_name])
+                            sample_weights[i] = max(
+                                sample_weights[i], class_max_weight[class_name]
+                            )
 
         # --- background weight derived from target fraction ---
         # pure background = no neophyte pixels of any phenology (weight still 0 after above)
@@ -387,12 +522,13 @@ class NeophyteDataset(Dataset):
             w_bg = bg_fraction * W_neo / ((1.0 - bg_fraction) * n_bg)
         else:
             if bg_fraction is not None and W_neo == 0:
-                print("Warning: no neophyte images found -- bg_fraction ignored, using uniform weights.")
+                print(
+                    "Warning: no neophyte images found -- bg_fraction ignored, using uniform weights."
+                )
             w_bg = float(group_weights[0])  # raw 1/count fallback
         sample_weights[is_bg] = w_bg
 
         return sample_weights.tolist()
-
 
     def _load_sample(self, i):
         """Load one sample (index ``i``) from disk into a dict of arrays.
@@ -406,64 +542,76 @@ class NeophyteDataset(Dataset):
 
         # image + meta
         with rasterio.open(self.image_files[i]) as src:
-            out['image'] = np.stack(src.read([1, 2, 3]), axis=-1)
-            out['tile_gsd_mm'] = _tile_gsd_mm(src)
+            out["image"] = np.stack(src.read([1, 2, 3]), axis=-1)
+            out["tile_gsd_mm"] = _tile_gsd_mm(src)
             if self.geo:
-                out['meta'] = src.meta
+                out["meta"] = src.meta
 
         # mask (+ auxiliary)
         with rasterio.open(self.mask_files[i]) as src:
             mask = src.read(1).astype(np.int64)
             if self.load_auxiliary:
-                out['canopy'] = src.read(2).astype(np.uint8)
-                out['phenology'] = src.read(3).astype(np.uint8)
+                out["canopy"] = src.read(2).astype(np.uint8)
+                out["phenology"] = src.read(3).astype(np.uint8)
 
         # Modify mask according to value_mapping
         if self.value_mapping:
-            dataset_name = extract_dataset_name(self.mask_files[i], self.value_mapping.keys())
+            dataset_name = extract_dataset_name(
+                self.mask_files[i], self.value_mapping.keys()
+            )
             mapping_dict = self.value_mapping.get(dataset_name)
             if mapping_dict:
                 for old_value, new_value in mapping_dict.items():
                     mask[mask == int(old_value)] = new_value
-        out['mask'] = mask.astype(np.int8)
+        out["mask"] = mask.astype(np.int8)
 
         # DSM + DTM
         if self.load_dsm:
             with rasterio.open(self.dsm_files[i]) as src:
                 dsm_raw = src.read(1).astype(np.float32)
-                dsm_nodata = src.nodata if src.nodata is not None else self.dsm_noDataValue
+                dsm_nodata = (
+                    src.nodata if src.nodata is not None else self.dsm_noDataValue
+                )
         if self.load_dtm:
             with rasterio.open(self.dtm_files[i]) as src:
                 dtm_raw = src.read(1).astype(np.float32)
-                dtm_nodata = src.nodata if src.nodata is not None else self.dsm_noDataValue
+                dtm_nodata = (
+                    src.nodata if src.nodata is not None else self.dsm_noDataValue
+                )
 
         # nDSM = DSM - DTM (computed from raw values before normalization)
         if self.load_ndsm:
             # Resize DTM to match DSM resolution if they differ (DTM is often coarser)
             if dtm_raw.shape != dsm_raw.shape:
-                dtm_raw = cv2.resize(dtm_raw, (dsm_raw.shape[1], dsm_raw.shape[0]), interpolation=cv2.INTER_LINEAR)
+                dtm_raw = cv2.resize(
+                    dtm_raw,
+                    (dsm_raw.shape[1], dsm_raw.shape[0]),
+                    interpolation=cv2.INTER_LINEAR,
+                )
             nodata_mask = (
-                (dsm_raw == dsm_nodata) | np.isnan(dsm_raw) |
-                (dtm_raw == dtm_nodata) | np.isnan(dtm_raw)
+                (dsm_raw == dsm_nodata)
+                | np.isnan(dsm_raw)
+                | (dtm_raw == dtm_nodata)
+                | np.isnan(dtm_raw)
             )
             ndsm = dsm_raw - dtm_raw
             ndsm[nodata_mask] = 0.0  # no height info where either is nodata
             if self.ndsm_transform:
-                ndsm = self.ndsm_transform(image=ndsm)['image']
-            out['ndsm'] = ndsm
+                ndsm = self.ndsm_transform(image=ndsm)["image"]
+            out["ndsm"] = ndsm
         else:
             if self.load_dsm:
                 dsm = dsm_raw.copy()
                 if self.dsm_transform:
                     dsm[dsm == dsm_nodata] = self.dsm_mean
-                    dsm = self.dsm_transform(image=dsm)['image']
-                out['dsm'] = dsm
+                    dsm = self.dsm_transform(image=dsm)["image"]
+                out["dsm"] = dsm
             if self.load_dtm:
                 dtm = dtm_raw.copy()
                 if self.dsm_transform:
                     dtm[dtm == dtm_nodata] = self.dsm_mean
-                    dtm = self.dsm_transform(image=dtm)['image']
-                out['dtm'] = dtm
+                    dtm = self.dsm_transform(image=dtm)["image"]
+                out["dtm"] = dtm
 
         return out
 
@@ -487,30 +635,32 @@ class NeophyteDataset(Dataset):
         # ThreadPoolExecutor.map yields results in input order, so the *_ram lists
         # stay aligned with image_files even though loading finishes out of order.
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            for out in tqdm(ex.map(self._load_sample, range(n)), total=n,
-                            desc="Loading samples", unit="img"):
-                self.images_ram.append(out['image'])
-                self.masks_ram.append(out['mask'])
-                self.tile_gsd_ram.append(out['tile_gsd_mm'])
+            for out in tqdm(
+                ex.map(self._load_sample, range(n)),
+                total=n,
+                desc="Loading samples",
+                unit="img",
+            ):
+                self.images_ram.append(out["image"])
+                self.masks_ram.append(out["mask"])
+                self.tile_gsd_ram.append(out["tile_gsd_mm"])
                 if self.geo:
-                    self.meta_ram.append(out['meta'])
+                    self.meta_ram.append(out["meta"])
                 if self.load_auxiliary:
-                    self.canopy_ram.append(out['canopy'])
-                    self.phenology_ram.append(out['phenology'])
+                    self.canopy_ram.append(out["canopy"])
+                    self.phenology_ram.append(out["phenology"])
                 if self.load_ndsm:
-                    self.ndsm_ram.append(out['ndsm'])
+                    self.ndsm_ram.append(out["ndsm"])
                 else:
                     if self.load_dsm:
-                        self.dsm_ram.append(out['dsm'])
+                        self.dsm_ram.append(out["dsm"])
                     if self.load_dtm:
-                        self.dtm_ram.append(out['dtm'])
+                        self.dtm_ram.append(out["dtm"])
 
         print("Finished preloading dataset.")
 
-
     def __len__(self):
         return len(self.image_files)
-
 
     def __getitem__(self, idx):
         image = None
@@ -523,7 +673,6 @@ class NeophyteDataset(Dataset):
 
         # # Load from RAM =====================================================
         if self.load_into_ram:
-
             image = self.images_ram[idx].copy()
             mask = self.masks_ram[idx].astype(np.int64)
             tile_gsd = self.tile_gsd_ram[idx]
@@ -541,10 +690,9 @@ class NeophyteDataset(Dataset):
                     dsm = self.dsm_ram[idx].copy()
                 if self.load_dtm:
                     dtm = self.dtm_ram[idx].copy()
-            
-        # # Load from disk ====================================================       
+
+        # # Load from disk ====================================================
         else:
-            
             try:
                 with rasterio.open(self.image_files[idx]) as src:
                     image = src.read([1, 2, 3])
@@ -557,11 +705,11 @@ class NeophyteDataset(Dataset):
             except rasterio.errors.RasterioIOError as e:
                 print(f"Failed to read image at index {idx}: {self.image_files[idx]}")
                 raise e  # R
-            
-            if image.dtype !='uint8':
+
+            if image.dtype != "uint8":
                 print(self.image_files[idx], image.dtype)
-    
-            # Load mask and additional infos (e.g. canopy / phenology) based on file type 
+
+            # Load mask and additional infos (e.g. canopy / phenology) based on file type
             try:
                 with rasterio.open(self.mask_files[idx]) as src:
                     mask = src.read(1).astype(np.int64)
@@ -571,63 +719,74 @@ class NeophyteDataset(Dataset):
             except rasterio.errors.RasterioIOError as e:
                 print(f"Failed to read mask at index {idx}: {self.mask_files[idx]}")
                 raise e  # R
-                
+
             # Modify mask according to value_mapping
             if self.value_mapping:
-                dataset_name = extract_dataset_name(self.mask_files[idx], self.value_mapping.keys())
+                dataset_name = extract_dataset_name(
+                    self.mask_files[idx], self.value_mapping.keys()
+                )
                 mapping_dict = self.value_mapping.get(dataset_name)
                 if mapping_dict:
                     for old_value, new_value in mapping_dict.items():
                         mask[mask == int(old_value)] = new_value
-            
+
             # DSM / DTM / nDSM
             if self.load_dsm:
                 with rasterio.open(self.dsm_files[idx]) as src:
                     dsm_raw = src.read(1).astype(np.float32)
-                    dsm_nodata = src.nodata if src.nodata is not None else self.dsm_noDataValue
+                    dsm_nodata = (
+                        src.nodata if src.nodata is not None else self.dsm_noDataValue
+                    )
             if self.load_dtm:
                 with rasterio.open(self.dtm_files[idx]) as src:
                     dtm_raw = src.read(1).astype(np.float32)
-                    dtm_nodata = src.nodata if src.nodata is not None else self.dsm_noDataValue
+                    dtm_nodata = (
+                        src.nodata if src.nodata is not None else self.dsm_noDataValue
+                    )
 
             if self.load_ndsm:
                 if dtm_raw.shape != dsm_raw.shape:
-                    dtm_raw = cv2.resize(dtm_raw, (dsm_raw.shape[1], dsm_raw.shape[0]), interpolation=cv2.INTER_LINEAR)
+                    dtm_raw = cv2.resize(
+                        dtm_raw,
+                        (dsm_raw.shape[1], dsm_raw.shape[0]),
+                        interpolation=cv2.INTER_LINEAR,
+                    )
                 nodata_mask = (
-                    (dsm_raw == dsm_nodata) | np.isnan(dsm_raw) |
-                    (dtm_raw == dtm_nodata) | np.isnan(dtm_raw)
+                    (dsm_raw == dsm_nodata)
+                    | np.isnan(dsm_raw)
+                    | (dtm_raw == dtm_nodata)
+                    | np.isnan(dtm_raw)
                 )
                 ndsm = dsm_raw - dtm_raw
                 ndsm[nodata_mask] = 0.0
                 if self.ndsm_transform:
                     augmented = self.ndsm_transform(image=ndsm)
-                    ndsm = augmented['image']
+                    ndsm = augmented["image"]
                 if self.return_dsm_dtm:
                     dsm = dsm_raw.copy()
                     if self.dsm_transform:
                         dsm[dsm == dsm_nodata] = self.dsm_mean
                         augmented = self.dsm_transform(image=dsm)
-                        dsm = augmented['image']
+                        dsm = augmented["image"]
                     dtm = dtm_raw.copy()
                     if self.dsm_transform:
                         dtm[dtm == dtm_nodata] = self.dsm_mean
                         augmented = self.dsm_transform(image=dtm)
-                        dtm = augmented['image']
+                        dtm = augmented["image"]
             else:
                 if self.load_dsm:
                     dsm = dsm_raw.copy()
                     if self.dsm_transform:
                         dsm[dsm == dsm_nodata] = self.dsm_mean
                         augmented = self.dsm_transform(image=dsm)
-                        dsm = augmented['image']
+                        dsm = augmented["image"]
                 if self.load_dtm:
                     dtm = dtm_raw.copy()
                     if self.dsm_transform:
                         dtm[dtm == dtm_nodata] = self.dsm_mean
                         augmented = self.dsm_transform(image=dtm)
-                        dtm = augmented['image']
-                    
-        
+                        dtm = augmented["image"]
+
         # # Apply transformations =============================================
         if self.transform:
             # Per-tile side information for augmentations that need it: albumentations
@@ -635,45 +794,55 @@ class NeophyteDataset(Dataset):
             # GSD ranges 1.5-3.0 mm/px, so anything scale-aware (e.g. pasting objects at
             # a realistic size) has to read the tile's own resolution rather than an average.
             from utils.transform_utils import set_tile_context
-            set_tile_context(self.transform, gsd=tile_gsd,
-                             month=_tile_month(self.image_files[idx]))
-            augmented = self.transform(image=image, mask=mask, canopy=canopy, phenology=phenology, dsm=dsm, dtm=dtm, ndsm=ndsm)
-            image = augmented['image']
-            mask = augmented['mask']
+
+            set_tile_context(
+                self.transform, gsd=tile_gsd, month=_tile_month(self.image_files[idx])
+            )
+            augmented = self.transform(
+                image=image,
+                mask=mask,
+                canopy=canopy,
+                phenology=phenology,
+                dsm=dsm,
+                dtm=dtm,
+                ndsm=ndsm,
+            )
+            image = augmented["image"]
+            mask = augmented["mask"]
 
             if self.load_auxiliary:
-                canopy = augmented['canopy']
-                phenology = augmented['phenology']
+                canopy = augmented["canopy"]
+                phenology = augmented["phenology"]
 
             if self.load_ndsm:
-                ndsm = augmented['ndsm']
+                ndsm = augmented["ndsm"]
             if self.return_dsm_dtm or not self.load_ndsm:
                 if self.load_dsm:
-                    dsm = augmented['dsm']
+                    dsm = augmented["dsm"]
                 if self.load_dtm:
-                    dtm = augmented['dtm']
+                    dtm = augmented["dtm"]
 
         # # Create sample =====================================================
-        sample = {'image': image,
-                  'mask': mask.long(),
-                  'meta': meta,
-                  'name': self.image_files[idx],
-                  }
+        sample = {
+            "image": image,
+            "mask": mask.long(),
+            "meta": meta,
+            "name": self.image_files[idx],
+        }
         if self.load_auxiliary:
-            sample['phenology'] = phenology
-            sample['canopy'] = canopy.float()
+            sample["phenology"] = phenology
+            sample["canopy"] = canopy.float()
 
         if self.load_ndsm:
-            sample['ndsm'] = ndsm.unsqueeze(0)
+            sample["ndsm"] = ndsm.unsqueeze(0)
         if self.return_dsm_dtm or not self.load_ndsm:
             if self.load_dsm:
-                sample['dsm'] = dsm.unsqueeze(0)
+                sample["dsm"] = dsm.unsqueeze(0)
             if self.load_dtm:
-                sample['dtm'] = dtm.unsqueeze(0)
-            
+                sample["dtm"] = dtm.unsqueeze(0)
+
         return sample
-    
-    
+
 
 def get_normalize_params(compose: Compose) -> Tuple[Optional[float], Optional[float]]:
     """
@@ -692,12 +861,13 @@ def get_normalize_params(compose: Compose) -> Tuple[Optional[float], Optional[fl
     return None, None
 
 
-
 def class_px_col(class_name):
     return f"{class_name}_px"
 
+
 def only_col(class_name):
     return f"only_{class_name}"
+
 
 def pheno_px_cols(class_name):
     return {
@@ -705,6 +875,7 @@ def pheno_px_cols(class_name):
         "flower": f"flower_{class_name}_px",
         "fruiting": f"fruiting_{class_name}_px",
     }
+
 
 def select_few_shot_for_class(
     df,
@@ -718,10 +889,7 @@ def select_few_shot_for_class(
     pheno_cols = pheno_px_cols(class_name)
 
     # --- strict filtering ---
-    candidates = df[
-        (df[only_flag] == 1) &
-        (df[px_col] > 0)
-    ].copy()
+    candidates = df[(df[only_flag] == 1) & (df[px_col] > 0)].copy()
 
     if candidates.empty:
         return []
@@ -730,10 +898,9 @@ def select_few_shot_for_class(
     if mode == "random":
         candidates = candidates.sample(frac=1.0)
     elif mode == "all":
-        candidates = df[df[px_col] > 0].copy() # w/o only_col restriction
+        candidates = df[df[px_col] > 0].copy()  # w/o only_col restriction
     else:
         candidates = candidates.sort_values(px_col, ascending=False)
-        
 
     # --- no constraint ---
     if mode in {"all", "random", "max_px"}:
@@ -741,10 +908,12 @@ def select_few_shot_for_class(
 
     # --- define grouping key ---
     if mode == "max_px_site":
+
         def key_fn(row):
             return (row[site_col],)
 
     elif mode == "max_px_pheno":
+
         def key_fn(row):
             for p, col in pheno_cols.items():
                 if row[col] > 0:
@@ -752,6 +921,7 @@ def select_few_shot_for_class(
             return None  # unknown → ignored
 
     elif mode == "max_px_site_pheno":
+
         def key_fn(row):
             for p, col in pheno_cols.items():
                 if row[col] > 0:
