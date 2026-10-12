@@ -24,7 +24,7 @@ deterministic_train: False  # True forces deterministic kernels (slower)
 # # Logging: 'wandb' (needs a Weights & Biases account: run wandb login once) or 'csv'
 # # (metrics.csv inside the run directory, no account needed).
 logger: wandb
-log_name: juliand942-uzh/ai4good-neophytes  # W&B project name
+log_name: ai4good-neophytes  # W&B project name
 
 log_dir: lightning_logs
 log_path: ${log_dir}/${exp_name}
