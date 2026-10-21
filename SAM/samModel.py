@@ -3,6 +3,8 @@ from torch import nn
 import numpy as np
 import matplotlib
 
+from pathlib import Path
+
 
 import os
 os.environ["HF_TOKEN"] = ""
@@ -10,6 +12,17 @@ os.environ["HF_TOKEN"] = ""
 
 from PIL import Image
 from transformers import Sam3Model, Sam3Processor
+
+#from sam_loss import sam_object_loss
+CLASS_PROMPTS = {
+    1: "butterfly bush",      # Buddleja davidii
+    2: "staghorn sumac",      # Rhus typhina
+    3: "Japanese knotweed",   # Reynoutria japonica
+    4: "Turkish wartycabbage",# Bunias orientalis
+    5: "narrow-leaved ragwort", # Senecio inaequidens
+    6: "tree of heaven",      # Ailanthus altissima
+}
+
 
 
 class CustomSam(nn.Module):
@@ -106,11 +119,7 @@ class CustomSam(nn.Module):
     
     def trainModel(self, train_loader, val_loader=None, epochs=10, lr=1e-4,
                    checkpoint_dir="SAM/checkpoints", resume=None):
-        """Fine-tune object/mask decoders and scoring; save latest and best validation-loss checkpoints.
-
-        resume restores trainable weights, optimizer, epoch and history. Pass matching
-        loaders/class prompts when resuming. No data is uploaded.
-        """
+        
         if epochs < 1 or len(train_loader) == 0:
             raise ValueError("Need positive epochs and a nonempty training loader")
         if val_loader is not None and len(val_loader) == 0:
@@ -130,34 +139,9 @@ class CustomSam(nn.Module):
             optimizer.load_state_dict(state["optimizer"])
             start, best, history = state["epoch"], state["best_loss"], state["history"]
 
-        def run_epoch(loader, training):
-            self.train(training)
-            total, count = 0.0, 0
-            with torch.set_grad_enabled(training):
-                for batch in loader:
-                    keep = [i for i, valid in enumerate(batch["valid"]) if valid.any()]
-                    if not keep:
-                        continue
-                    batch = {key: [values[i] for i in keep] for key, values in batch.items()}
-                    if training:
-                        optimizer.zero_grad(set_to_none=True)
-                    logits = self(batch["image"], batch["prompt"])
-                    loss = sam_object_loss(logits, batch)
-                    if not torch.isfinite(loss):
-                        raise FloatingPointError("Non-finite loss")
-                    if training:
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(parameters, 1.0)
-                        optimizer.step()
-                    total += loss.item() * len(keep)
-                    count += len(keep)
-            if not count:
-                raise ValueError("Loader contains no valid labeled pixels")
-            return total / count
-
         for epoch in range(start, start + epochs):
-            train_loss = run_epoch(train_loader, True)
-            val_loss = run_epoch(val_loader, False) if val_loader is not None else None
+            train_loss = self.run_epoch(train_loader, True,optimizer,parameters)
+            val_loss = self.run_epoch(val_loader, False,optimizer,parameters) if val_loader is not None else None
             monitored = train_loss if val_loss is None else val_loss
             improved = monitored < best
             best = min(best, monitored)
@@ -174,6 +158,54 @@ class CustomSam(nn.Module):
             print(history[-1], flush=True)
         self.eval()
         return history
+
+    def run_epoch(self, loader, training, optimizer, parameters):
+        self.train(training)
+        total, count = 0.0, 0
+        with torch.set_grad_enabled(training):
+            for batch in loader:
+                keep = [i for i, valid in enumerate(batch["valid"]) if valid.any()]
+                if not keep:
+                    continue
+                
+                # 1. Prepare segmentation_targets (list of dicts with "masks")
+                #    Each element corresponds to one image; "masks" is a list of mask paths/tensors
+                segmentation_targets = [
+                    {"masks": batch["mask"][i]}  # or a list of mask paths
+                    for i in keep
+                ]
+                
+                # 2. Call the processor with images, text prompts, and targets
+                inputs = self.processor(
+                    images=[batch["image"][i] for i in keep],
+                    text=[batch["prompt"][i] for i in keep],
+                    segmentation_targets=segmentation_targets,
+                    return_tensors="pt",
+                ).to(self.model.device)
+                
+                if training:
+                    optimizer.zero_grad(set_to_none=True)
+                
+                # 3. Forward pass — loss is computed automatically
+                outputs = self.model(**inputs)
+                loss = outputs.loss
+                
+                if loss is None:
+                    raise ValueError("Model did not return a loss — check segmentation_targets format")
+                if not torch.isfinite(loss):
+                    raise FloatingPointError("Non-finite loss")
+                
+                if training:
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(parameters, 1.0)
+                    optimizer.step()
+                
+                total += loss.item() * len(keep)
+                count += len(keep)
+        
+        if not count:
+            raise ValueError("Loader contains no valid labeled pixels")
+        return total / count
 
     def train(self, mode=True):
             super().train(mode)
