@@ -13,15 +13,6 @@ os.environ["HF_TOKEN"] = ""
 from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 
-#from sam_loss import sam_object_loss
-CLASS_PROMPTS = {
-    1: "butterfly bush",      # Buddleja davidii
-    2: "staghorn sumac",      # Rhus typhina
-    3: "Japanese knotweed",   # Reynoutria japonica
-    4: "Turkish wartycabbage",# Bunias orientalis
-    5: "narrow-leaved ragwort", # Senecio inaequidens
-    6: "tree of heaven",      # Ailanthus altissima
-}
 
 
 
@@ -67,35 +58,9 @@ class CustomSam(nn.Module):
             mask_threshold=0.5,
             target_sizes=inputs["original_sizes"].tolist(),
         )[0]
-        return result["masks"]
 
-    '''@torch.inference_mode()
-    def runSemanticInference(self, image, threshold=0.5):
-            """Per-class prompt + argmax; IDs match NeophyteDataset exactly."""
-            if not 0 <= threshold <= 1:
-                raise ValueError("threshold must be between 0 and 1")
-            if isinstance(image, (str, Path)):
-                with Image.open(image) as source:
-                    image = source.convert("RGB")
-            else:
-                image = image.convert("RGB")
-            was_training = self.training
-            self.eval()
-            try:
-                maps = []
-                for prompt in CLASS_PROMPTS.values():
-                    outputs = self([image], [prompt])
-                    scores = outputs.pred_logits[0].sigmoid().reshape(-1)
-                    if outputs.presence_logits is not None:
-                        scores = scores * outputs.presence_logits[0].sigmoid().reshape(())
-                    probabilities = F.interpolate(outputs.pred_masks[0, :, None],
-                        size=(image.height, image.width), mode="bilinear", align_corners=False)[:, 0].sigmoid()
-                    maps.append((probabilities * scores[:, None, None]).amax(0).cpu())
-                confidence, index = torch.stack(maps).max(0)
-                ids = torch.tensor(list(CLASS_PROMPTS))
-                return ids[index].masked_fill(confidence < threshold, 0)
-            finally:
-                self.train(was_training)'''
+        return result["masks"]
+    
 
     def overlay_masks(self,image, masks):
         image = image.convert("RGBA")
@@ -116,106 +81,141 @@ class CustomSam(nn.Module):
             image = Image.alpha_composite(image, overlay)
         return image
 
-    
-    def trainModel(self, train_loader, val_loader=None, epochs=10, lr=1e-4,
-                   checkpoint_dir="SAM/checkpoints", resume=None):
-        
-        if epochs < 1 or len(train_loader) == 0:
-            raise ValueError("Need positive epochs and a nonempty training loader")
-        if val_loader is not None and len(val_loader) == 0:
-            raise ValueError("Validation loader is empty")
-        parameters = [p for p in self.parameters() if p.requires_grad]
-        optimizer = torch.optim.AdamW(parameters, lr=lr)
-        directory = Path(checkpoint_dir)
-        directory.mkdir(parents=True, exist_ok=True)
-        start, best, history = 0, float("inf"), []
-        if resume is not None:
-            state = torch.load(resume, map_location=next(self.parameters()).device, weights_only=True)
-            if state["prompts"] != CLASS_PROMPTS:
-                raise ValueError("Checkpoint class prompts do not match")
-            if state.get("objective") != "sam_object_v1":
-                raise ValueError("Checkpoint uses a different training objective")
-            self.model.load_state_dict(state["trainable"], strict=False)
-            optimizer.load_state_dict(state["optimizer"])
-            start, best, history = state["epoch"], state["best_loss"], state["history"]
+    def forward(self,data):
 
-        for epoch in range(start, start + epochs):
-            train_loss = self.run_epoch(train_loader, True,optimizer,parameters)
-            val_loss = self.run_epoch(val_loader, False,optimizer,parameters) if val_loader is not None else None
-            monitored = train_loss if val_loss is None else val_loss
-            improved = monitored < best
-            best = min(best, monitored)
-            history.append({"epoch": epoch + 1, "train_loss": train_loss, "val_loss": val_loss})
-            names = {name for name, p in self.model.named_parameters() if p.requires_grad}
-            state = {"objective": "sam_object_v1",
-                     "trainable": {name: value.detach().cpu() for name, value in self.model.state_dict().items() if name in names},
-                     "optimizer": optimizer.state_dict(), "epoch": epoch + 1,
-                     "best_loss": best, "history": history, "prompts": CLASS_PROMPTS,
-                     "base_model": "facebook/sam3"}
-            torch.save(state, directory / "latest.pt")
-            if improved:
-                torch.save(state, directory / "best.pt")
-            print(history[-1], flush=True)
-        self.eval()
-        return history
+        output = self.model(data)
 
-    def run_epoch(self, loader, training, optimizer, parameters):
-        self.train(training)
-        total, count = 0.0, 0
-        with torch.set_grad_enabled(training):
-            for batch in loader:
-                keep = [i for i, valid in enumerate(batch["valid"]) if valid.any()]
-                if not keep:
-                    continue
-                
-                # 1. Prepare segmentation_targets (list of dicts with "masks")
-                #    Each element corresponds to one image; "masks" is a list of mask paths/tensors
-                segmentation_targets = [
-                    {"masks": batch["mask"][i]}  # or a list of mask paths
-                    for i in keep
-                ]
-                
-                # 2. Call the processor with images, text prompts, and targets
-                inputs = self.processor(
-                    images=[batch["image"][i] for i in keep],
-                    text=[batch["prompt"][i] for i in keep],
-                    segmentation_targets=segmentation_targets,
-                    return_tensors="pt",
-                ).to(self.model.device)
-                
-                if training:
-                    optimizer.zero_grad(set_to_none=True)
-                
-                # 3. Forward pass — loss is computed automatically
-                outputs = self.model(**inputs)
-                loss = outputs.loss
-                
-                if loss is None:
-                    raise ValueError("Model did not return a loss — check segmentation_targets format")
-                if not torch.isfinite(loss):
-                    raise FloatingPointError("Non-finite loss")
-                
-                if training:
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(parameters, 1.0)
-                    optimizer.step()
-                
-                total += loss.item() * len(keep)
-                count += len(keep)
-        
-        if not count:
-            raise ValueError("Loader contains no valid labeled pixels")
-        return total / count
+        return output
 
-    def train(self, mode=True):
-            super().train(mode)
-            self.model.eval()
-            for name in ("mask_decoder", "detr_decoder", "dot_product_scoring"):
-                getattr(self.model, name).train(mode)
-            return self
-    
-    def forward(self, images, prompts):
-            inputs = self.processor(images=images, text=prompts, return_tensors="pt",
-                                    padding=True).to(next(self.parameters()).device)
-            # Do not use inference_mode/no_grad: decoder gradients are required.
-            return self.model(**inputs)
+    def trainModel(self,data,optimizer,loss,epochs=10, lr=0.001):
+
+        train = data[0] 
+        val = data[1]
+
+        self.optim = optimizer
+
+        self.loss = loss
+
+        trainLossList, trainAccList = [], []
+        valLossList, valAccList = [], []
+
+        for ep in range(epochs):
+
+            print(f"Epoch [{ep+1}/{epochs}]")
+
+            self.train()
+            totalLoss= 0.0
+            correctT = 0
+            totalT = 0
+            for batch in train:
+                #im = batch1
+                #v,_=batch2
+                #e,_ = batch3
+
+                x , t , p = batch
+
+                #t = t.to(self.dev)
+                #v = v.to(self.dev)
+                #e = e.to(self.dev)
+
+                #graph=(v,e)
+                y = self.forward(x,p)
+                
+                #t = t.squeeze(1)
+                #t = t.argmax(dim=1).long() 
+                #print(t.shape)
+                #print(f"shape t {y.shape}") 
+                #print(f"shape t {t.shape}") 
+                loss = self.loss(y,t)
+                self.optim.zero_grad()
+                loss.backward()
+                self.optim.step()
+                #print(loss.item())
+                totalLoss += loss.item()
+                #print(f"Train loss: {loss.item():.4f}")
+
+                preds = y.argmax(dim=1)
+                correctT += (preds == t).sum().item()
+                totalT += t.numel()
+
+            trainAccuracy = correctT / max(totalT, 1)
+            totalLoss= totalLoss/totalT
+            trainLossList.append(totalLoss)
+            trainAccList.append(trainAccuracy)
+
+
+            print(f"Train Loss: {totalLoss:.4f}, Train Accuracy: {trainAccuracy*100:.4f}%")
+
+            '''# test loop
+            self.eval()
+
+            totalEvalLoss = 0.0
+            correct = 0
+            total = 0
+            targetList=[]
+            predList=[]
+
+            with torch.no_grad():
+                for batch1,batch2,batch3 in zip(testIm,testVe,testEd):
+
+                    im, t = batch1
+                    v, _ = batch2
+                    e, _ = batch3
+
+                    im = im.to(self.dev)
+                    t = t.to(self.dev)
+                    v = v.to(self.dev)
+                    e = e.to(self.dev)
+
+                    graph = (v, e)
+
+                    y = self.forward([im, graph])
+                    #t = t.view_as(y) 
+                    #t = t.view(-1).long()
+                    t = t.squeeze(1)
+                    t = t.argmax(dim=1).long() 
+                    loss = self.loss(y, t)
+                    totalEvalLoss += loss.item()
+
+                    # Classification: accuracy
+                    predList.append(y)
+                    targetList.append(t)
+
+                    preds = y.argmax(dim=1)
+                    
+                    correct += (preds == t).sum().item()
+                    total += t.numel()
+
+            avgEvalLoss = totalEvalLoss / max(len(testIm), 1)
+            
+            accuracy = correct / max(total, 1)
+            valLossList.append(avgEvalLoss)
+            valAccList.append(accuracy)
+
+            print(f"Val Loss: {avgEvalLoss:.4f}, Val Accuracy: {accuracy*100:.4f}%\n")
+
+            if avgEvalLoss < best_val_loss:
+                best_val_loss = avgEvalLoss
+                epochs_no_improve = 0
+                best_model_state = self.state_dict()
+                self.bestVal = accuracy*100  
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    print(f"Early stopping at epoch {epoch+1} due to no improvement in validation loss.")
+                    self.load_state_dict(best_model_state)  
+                    break
+        #self.bestVal = best_val_loss'''
+        return  [trainLossList, trainAccList , valLossList, valAccList]#, [predList, targetList]
+
+
+
+
+        return
+
+
+def main():
+    return
+
+main()
+
