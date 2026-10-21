@@ -51,3 +51,9 @@ lets SAM3 normalize RGB, and ignores label values 254/255 through the configured
 mapping to -1. Elevation and auxiliary labels are not passed to SAM3.
 It prints F1 and recall for all seven classes, overall pixel accuracy, and macro
 recall. Class names are used verbatim as prompts, including Background.
+
+Each completed run saves `metrics.json` in `SAM/results/<timestamp>_<data>/`,
+containing full-precision metrics, per-class support, the confusion matrix
+(true classes in rows, predictions in columns), and run settings. Set
+`--output-dir /path/to/results` to change the results root. Pixel predictions
+are not saved.

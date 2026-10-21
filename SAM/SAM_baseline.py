@@ -6,8 +6,10 @@ From the repository root:
 """
 
 import argparse
+import json
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -44,9 +46,12 @@ def main():
     parser.add_argument('--data', default='neophytes_split_cv1_test')
     parser.add_argument('--checkpoint', default='facebook/sam3', help='Hugging Face model ID or local pretrained directory')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
+    parser.add_argument('--output-dir', default='SAM/results', help='Results root, relative to the repository or absolute')
     args = parser.parse_args()
     # Split paths and stats CSV entries are relative to the repository root.
     os.chdir(Path(__file__).resolve().parents[1])
+    output_dir = Path(args.output_dir) / f'{datetime.now():%Y%m%d_%H%M%S_%f}_{args.data}'
+    output_dir.mkdir(parents=True, exist_ok=False)
     with initialize_config_dir(version_base=None, config_dir=str(Path(__file__).resolve().parents[1] / 'configs')):
         cfg = compose(config_name=None, overrides=[f'+data={args.data}']).data
     for path in [cfg.dataset_stats, *cfg.image_dir.test]:
@@ -82,6 +87,19 @@ def main():
         print(f'{name}: F1={f:.4f}  Recall={r:.4f}')
     print(f'Accuracy: {tp.sum() / confusion.sum().clamp_min(1):.4f}')
     print(f'Macro recall: {recall.mean():.4f}')
+    results = {
+        'data': args.data, 'checkpoint': args.checkpoint, 'device': args.device,
+        'num_images': len(data.test_dataset), 'ignore_index': cfg.ignore_index,
+        'threshold': 0.5, 'mask_threshold': 0.5,
+        'per_class': {name: {'f1': f.item(), 'recall': r.item(), 'support': s.item()}
+                      for name, f, r, s in zip(class_names, f1, recall, support)},
+        'accuracy': (tp.sum() / confusion.sum().clamp_min(1)).item(),
+        'macro_recall': recall.mean().item(),
+        'class_names': class_names,
+        'confusion_matrix': confusion.tolist(),  # rows: true, columns: predicted
+    }
+    (output_dir / 'metrics.json').write_text(json.dumps(results, indent=2) + '\n')
+    print(f'Results saved to {output_dir.resolve() / "metrics.json"}')
 
 
 if __name__ == '__main__':
