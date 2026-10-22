@@ -21,7 +21,7 @@ from SAM_baseline import NeophyteDataModule, get_transforms, save_preview
 
 
 @torch.inference_mode()
-def infer_masks(model, processor, image, prompts=('plant',), threshold=0.5):
+def infer_masks(model, processor, image, prompts=(''), threshold=0.5):
     """Return raw postprocessed instance masks/scores and their binary union.
 
     image: uint8 CPU tensor [3, H, W]. No class competition or argmax.
