@@ -50,7 +50,13 @@ The baseline loads RGB and semantic labels, keeps whole-tile test geometry,
 lets SAM3 normalize RGB, and ignores label values 254/255 through the configured
 mapping to -1. Elevation and auxiliary labels are not passed to SAM3.
 It prints F1 and recall for all seven classes, overall pixel accuracy, and macro
-recall. Class names are used verbatim as prompts, including Background.
+recall. Species prompts use full scientific names; Background remains a prompt.
+Use `--original-prompts` to reproduce the abbreviated prompts.
+
+Before a full run, use `--diagnostic` to evaluate up to ten foreground-containing
+tiles and print detections and pixel counts. `--threshold 0.1` can test whether
+confidence filtering causes empty predictions; the default remains 0.5.
+Choose prompt/threshold settings on validation data before reporting test results.
 
 Each completed run saves `metrics.json` in `SAM/results/<timestamp>_<data>/`,
 containing full-precision metrics, per-class support, the confusion matrix

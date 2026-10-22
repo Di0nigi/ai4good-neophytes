@@ -22,21 +22,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from datasets.neophyte_datamodule import NeophyteDataModule
 from utils.transform_utils import get_transforms
 
+FULL_NAMES = {
+    'B. davidii': 'Buddleja davidii', 'R. typhina': 'Rhus typhina',
+    'R. japonica': 'Reynoutria japonica', 'B. orientalis': 'Bunias orientalis',
+    'S. inaequidens': 'Senecio inaequidens', 'A. altissima': 'Ailanthus altissima',
+}
+
 
 @torch.inference_mode()
-def predict(model, processor, image, class_names):
+def predict(model, processor, image, prompts, threshold, debug=False):
     image = Image.fromarray(image.permute(1, 2, 0).numpy())
     class_scores = []
-    for name in class_names:
+    for name in prompts:
         inputs = processor(images=image, text=name, return_tensors='pt').to(model.device)
         result = processor.post_process_instance_segmentation(
-            model(**inputs), threshold=0.5, mask_threshold=0.5,
+            model(**inputs), threshold=threshold, mask_threshold=0.5,
             target_sizes=[(image.height, image.width)])[0]
         # Merge instances into a class map weighted by detection confidence.
         masks = result['masks']
         scores = (masks * result['scores'][:, None, None]).amax(0) if len(masks) else torch.zeros(
             (image.height, image.width), device=model.device)
         class_scores.append(scores)
+        if debug:
+            best = result['scores'].max().item() if len(masks) else 0.0
+            print(f'  {name}: {len(masks)} masks, best confidence={best:.4f}')
     # All-zero ties resolve to class 0 (Background).
     return torch.stack(class_scores).argmax(0).cpu()
 
@@ -47,6 +56,9 @@ def main():
     parser.add_argument('--checkpoint', default='facebook/sam3', help='Hugging Face model ID or local pretrained directory')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--output-dir', default='SAM/results', help='Results root, relative to the repository or absolute')
+    parser.add_argument('--threshold', type=float, default=0.5)
+    parser.add_argument('--original-prompts', action='store_true', help='Use original abbreviated class names')
+    parser.add_argument('--diagnostic', action='store_true', help='Evaluate only 10 foreground-containing images and print detections')
     args = parser.parse_args()
     # Split paths and stats CSV entries are relative to the repository root.
     os.chdir(Path(__file__).resolve().parents[1])
@@ -69,15 +81,27 @@ def main():
     data.setup('test')
     print(f'{args.data}: {len(data.test_dataset)} test images on {args.device}', flush=True)
     class_names = [cfg.classes[i].name for i in sorted(cfg.classes, key=int)]
+    prompts = [name if args.original_prompts else FULL_NAMES.get(name, name) for name in class_names]
     n = len(class_names)
     model = Sam3Model.from_pretrained(args.checkpoint).to(args.device).eval()
     processor = Sam3Processor.from_pretrained(args.checkpoint)
     confusion = torch.zeros(n, n, dtype=torch.int64)
-    for batch in tqdm(data.test_dataloader(), desc='SAM3'):
+    loader = data.test_dataloader()
+    if args.diagnostic:
+        # Use existing per-tile stats to avoid a smoke test on background-only tiles.
+        stats = data.test_dataset.stats_df
+        indices = (stats[data.test_dataset.class_px_cols[1:]].sum(axis=1).to_numpy() > 0).nonzero()[0][:10]
+        loader = torch.utils.data.DataLoader(torch.utils.data.Subset(data.test_dataset, indices.tolist()), batch_size=1)
+    num_images = 0
+    for batch in tqdm(loader, desc='SAM3'):
         for image, target in zip(batch['image'], batch['mask']):
-            prediction = predict(model, processor, image, class_names)
+            prediction = predict(model, processor, image, prompts, args.threshold, args.diagnostic)
             valid = target != cfg.ignore_index
             confusion += torch.bincount(n * target[valid] + prediction[valid], minlength=n * n).reshape(n, n)
+            num_images += 1
+            if args.diagnostic:
+                print('  true pixels:', torch.bincount(target[valid], minlength=n).tolist())
+                print('  predicted pixels:', torch.bincount(prediction[valid], minlength=n).tolist())
 
     tp = confusion.diag().double()
     support, predicted = confusion.sum(1), confusion.sum(0)
@@ -89,8 +113,9 @@ def main():
     print(f'Macro recall: {recall.mean():.4f}')
     results = {
         'data': args.data, 'checkpoint': args.checkpoint, 'device': args.device,
-        'num_images': len(data.test_dataset), 'ignore_index': cfg.ignore_index,
-        'threshold': 0.5, 'mask_threshold': 0.5,
+        'num_images': num_images, 'ignore_index': cfg.ignore_index,
+        'threshold': args.threshold, 'mask_threshold': 0.5,
+        'prompts': prompts, 'diagnostic': args.diagnostic,
         'per_class': {name: {'f1': f.item(), 'recall': r.item(), 'support': s.item()}
                       for name, f, r, s in zip(class_names, f1, recall, support)},
         'accuracy': (tp.sum() / confusion.sum().clamp_min(1)).item(),
