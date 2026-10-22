@@ -35,6 +35,13 @@ def infer_masks(model, processor, image, prompts=('plant',), threshold=0.5):
             model(**inputs), threshold=threshold, mask_threshold=0.5,
             target_sizes=[(rgb.height, rgb.width)])[0]
         masks = result['masks'].bool().cpu()
+        # Some Transformers versions return empty masks at decoder resolution.
+        # Explicitly enforce the image grid, including when no instances remain.
+        if masks.numel() == 0:
+            masks = torch.zeros((0, *image.shape[-2:]), dtype=torch.bool)
+        elif masks.shape[-2:] != image.shape[-2:]:
+            masks = torch.nn.functional.interpolate(
+                masks[:, None].float(), size=image.shape[-2:], mode='nearest')[:, 0].bool()
         foreground |= masks.any(dim=0)
         instances.append({'prompt': prompt, 'masks': masks, 'scores': result['scores'].cpu()})
     return foreground, instances
