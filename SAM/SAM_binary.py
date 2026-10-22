@@ -6,7 +6,6 @@ python SAM/SAM_binary.py --data neophytes_split_cv1_test --device cuda
 import argparse
 import json
 import os
-import random
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,8 +54,7 @@ def main():
     parser.add_argument('--prompts', nargs='+', default=['plant'])
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--output-dir', default='SAM/binary_results')
-    parser.add_argument('--previews', type=int, default=50, help='Number of randomly selected comparison PNGs to save')
-    parser.add_argument('--seed', type=int, default=42, help='Random preview selection seed')
+    parser.add_argument('--previews', type=int, default=50, help='Number of plant-rich comparison PNGs to save')
     parser.add_argument('--max-images', type=int, default=None, help='Optional smoke-test limit; default evaluates the full test split')
     args = parser.parse_args()
     if not 0 <= args.threshold <= 1 or args.previews < 0 or (args.max_images is not None and args.max_images < 1):
@@ -82,7 +80,21 @@ def main():
     confusion = torch.zeros(2, 2, dtype=torch.int64)
     manifest = []
     num_images = min(len(data.test_dataset), args.max_images or len(data.test_dataset))
-    preview_indices = set(random.Random(args.seed).sample(range(num_images), min(args.previews, num_images)))
+    # Round-robin across species, taking their largest labeled areas first.
+    # Select previews only; evaluation still includes every configured test tile.
+    stats = data.test_dataset.stats_df.iloc[:num_images].reset_index(drop=True)
+    columns = data.test_dataset.class_px_cols[1:]
+    ranked = [stats.loc[stats[col] > 0, col].sort_values(ascending=False).index.tolist()
+              for col in columns]
+    preview_indices = set()
+    for rank in range(max(map(len, ranked), default=0) if args.previews else 0):
+        for candidates in ranked:
+            if rank < len(candidates):
+                preview_indices.add(candidates[rank])
+            if len(preview_indices) >= args.previews:
+                break
+        if len(preview_indices) >= args.previews:
+            break
     for batch in tqdm(data.test_dataloader(), desc='SAM3 binary'):
         image, target = batch['image'][0], batch['mask'][0]
         prediction, instances = infer_masks(model, processor, image, args.prompts, args.threshold)
@@ -106,7 +118,8 @@ def main():
                'foreground_recall': tp / max(tp + fn, 1),
                'accuracy': (tp + tn) / max(tp + tn + fp + fn, 1)}
     results = {**vars(args), 'num_images': len(manifest), 'ignore_index': cfg.ignore_index,
-               'mask_threshold': 0.5, 'class_names': ['Background', 'Labeled plant'],
+               'mask_threshold': 0.5, 'preview_selection': 'largest labeled areas, round-robin across species',
+               'class_names': ['Background', 'Labeled plant'],
                'confusion_matrix': confusion.tolist(), **metrics, 'images': manifest}
     (output / 'metrics.json').write_text(json.dumps(results, indent=2) + '\n')
     print(json.dumps(metrics, indent=2))

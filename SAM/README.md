@@ -82,8 +82,10 @@ Results go to `SAM/binary_results/<timestamp>_<data>/`: `metrics.json` contains
 binary F1, IoU, precision, recall, accuracy, confusion matrix (true rows,
 predicted columns), source paths and detection confidences. `masks/` contains
 one full-resolution binary PNG per evaluated image (0 background, 255 predicted
-foreground). Fifty randomly selected images also receive RGB / ground-truth / prediction
-comparison previews; change the count with `--previews` and selection with `--seed`
-(default 42). If fewer images are evaluated, all receive previews. Each manifest
+foreground). Up to fifty plant-rich images also receive RGB / ground-truth / prediction
+comparison previews. Selection cycles across species, prioritizing the largest
+labeled areas for each species and excluding background-only tiles. Change the
+count with `--previews`. If fewer foreground tiles are available, fewer previews
+are saved. This changes preview selection only, not the evaluated dataset. Each manifest
 entry records its preview filename when selected. Use `--max-images 10` for a short smoke test. Preview selection here
 does not filter for labeled foreground, and the full run includes background-only tiles.
