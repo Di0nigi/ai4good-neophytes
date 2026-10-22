@@ -29,11 +29,11 @@ FULL_NAMES = {
 }
 
 
-def save_preview(image, target, prediction, classes, path, ignore_index):
+def save_preview(image, target, prediction, classes, path, ignore_index, prediction_title='Prediction'):
     palette = torch.tensor([ImageColor.getrgb(classes[i].color) for i in sorted(classes, key=int)], dtype=torch.uint8)
     rgb = Image.fromarray(image.permute(1, 2, 0).numpy())
     panels = [('RGB', rgb)]
-    for title, labels in [('Ground truth', target), ('Prediction', prediction)]:
+    for title, labels in [('Ground truth', target), (prediction_title, prediction)]:
         colors = palette[labels.clamp_min(0)].clone()
         colors[target == ignore_index] = 128
         panels.append((title, Image.fromarray(colors.numpy())))

@@ -66,6 +66,21 @@ are not saved.
 
 ## Binary segmentation without class argmax
 
+Three explicit test modes are available:
+
+```bash
+python SAM/SAM_binary.py --data neophytes_split_cv1_test --device cuda --mode plant
+python SAM/SAM_binary.py --data neophytes_split_cv1_test --device cuda --mode empty
+python SAM/SAM_binary.py --data neophytes_split_cv1_test --device cuda --mode species
+```
+
+`empty` sends `text=""`. SAM3 requires text tokens or text embeddings, so this is
+an empty-text ablation, not automatic prompt-free mask generation. `species`
+runs each full species name separately and unions all masks without class argmax.
+The mode is included in result folder names, metadata, and prediction panel titles.
+Preview selection is identical across modes for the same split and image limit.
+Use `--max-images 10` to check empty-text behavior before a full run.
+
 ```bash
 python SAM/SAM_binary.py --data neophytes_split_cv1_test --device cuda
 ```

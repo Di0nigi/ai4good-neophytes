@@ -16,11 +16,11 @@ from PIL import Image
 from transformers import Sam3Model, Sam3Processor
 from tqdm import tqdm
 
-from SAM_baseline import NeophyteDataModule, get_transforms, save_preview
+from SAM_baseline import FULL_NAMES, NeophyteDataModule, get_transforms, save_preview
 
 
 @torch.inference_mode()
-def infer_masks(model, processor, image, prompts=('plant'), threshold=0.5):
+def infer_masks(model, processor, image, prompts=('plant',), threshold=0.5):
     """Return raw postprocessed instance masks/scores and their binary union.
 
     image: uint8 CPU tensor [3, H, W]. No class competition or argmax.
@@ -51,7 +51,9 @@ def main():
     parser.add_argument('--data', default='neophytes_split_cv1_test')
     parser.add_argument('--checkpoint', default='facebook/sam3')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
-    parser.add_argument('--prompts', nargs='+', default=['plant'])
+    parser.add_argument('--mode', choices=['plant', 'empty', 'species'], default='plant',
+                        help='empty sends empty text, not truly prompt-free SAM3')
+    parser.add_argument('--prompts', nargs='+', default=None, help='Optional custom prompts; overrides mode')
     parser.add_argument('--threshold', type=float, default=0.5)
     parser.add_argument('--output-dir', default='SAM/binary_results')
     parser.add_argument('--previews', type=int, default=50, help='Number of plant-rich comparison PNGs to save')
@@ -63,6 +65,15 @@ def main():
     os.chdir(root)
     with initialize_config_dir(version_base=None, config_dir=str(root / 'configs')):
         cfg = compose(config_name=None, overrides=[f'+data={args.data}']).data
+    if args.prompts is not None:
+        args.mode = 'custom'
+    else:
+        args.prompts = {'plant': ['plant'], 'empty': [''],
+                        'species': [FULL_NAMES.get(cfg.classes[i].name, cfg.classes[i].name)
+                                    for i in sorted(cfg.classes, key=int) if int(i) != 0]}[args.mode]
+    description = {'plant': 'plant prompt', 'empty': 'empty text (no semantic prompt)',
+                   'species': 'union of all species prompts', 'custom': 'custom prompts'}[args.mode]
+    print(f'Test: {description}; prompts={args.prompts!r}', flush=True)
     transform = get_transforms([t for t in cfg.test_transforms if t.type != 'Normalize'],
                                cfg.transforms_additional_targets)
     data = NeophyteDataModule(
@@ -71,7 +82,7 @@ def main():
         ignore_index=cfg.ignore_index, batch_size_test=1, num_workers=cfg.num_workers)
     data.prepare_data()
     data.setup('test')
-    output = Path(args.output_dir) / f'{datetime.now():%Y%m%d_%H%M%S_%f}_{args.data}'
+    output = Path(args.output_dir) / f'{datetime.now():%Y%m%d_%H%M%S_%f}_{args.data}_{args.mode}'
     (output / 'masks').mkdir(parents=True)
     model = Sam3Model.from_pretrained(args.checkpoint).to(args.device).eval()
     processor = Sam3Processor.from_pretrained(args.checkpoint)
@@ -95,7 +106,7 @@ def main():
                 break
         if len(preview_indices) >= args.previews:
             break
-    for batch in tqdm(data.test_dataloader(), desc='SAM3 binary'):
+    for batch in tqdm(data.test_dataloader(), desc=f'SAM3 binary ({args.mode})'):
         image, target = batch['image'][0], batch['mask'][0]
         prediction, instances = infer_masks(model, processor, image, args.prompts, args.threshold)
         valid = target != cfg.ignore_index
@@ -106,7 +117,8 @@ def main():
         preview = name if len(manifest) in preview_indices else None
         if preview is not None:
             truth[~valid] = cfg.ignore_index
-            save_preview(image, truth, prediction.long(), classes, output / name, cfg.ignore_index)
+            save_preview(image, truth, prediction.long(), classes, output / name, cfg.ignore_index,
+                         prediction_title=f'Prediction: {description} | threshold={args.threshold}')
         manifest.append({'source': batch['name'][0], 'mask': f'masks/{name}', 'preview': preview,
                          'detections': {r['prompt']: r['scores'].tolist() for r in instances}})
         if args.max_images is not None and len(manifest) >= args.max_images:
@@ -117,7 +129,8 @@ def main():
                'foreground_precision': tp / max(tp + fp, 1),
                'foreground_recall': tp / max(tp + fn, 1),
                'accuracy': (tp + tn) / max(tp + tn + fp + fn, 1)}
-    results = {**vars(args), 'num_images': len(manifest), 'ignore_index': cfg.ignore_index,
+    results = {**vars(args), 'test_description': description,
+               'num_images': len(manifest), 'ignore_index': cfg.ignore_index,
                'mask_threshold': 0.5, 'preview_selection': 'largest labeled areas, round-robin across species',
                'class_names': ['Background', 'Labeled plant'],
                'confusion_matrix': confusion.tolist(), **metrics, 'images': manifest}
