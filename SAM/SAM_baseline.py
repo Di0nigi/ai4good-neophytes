@@ -14,7 +14,7 @@ from pathlib import Path
 
 import torch
 from hydra import compose, initialize_config_dir
-from PIL import Image
+from PIL import Image, ImageColor, ImageDraw
 from transformers import Sam3Model, Sam3Processor
 from tqdm import tqdm
 
@@ -27,6 +27,28 @@ FULL_NAMES = {
     'R. japonica': 'Reynoutria japonica', 'B. orientalis': 'Bunias orientalis',
     'S. inaequidens': 'Senecio inaequidens', 'A. altissima': 'Ailanthus altissima',
 }
+
+
+def save_preview(image, target, prediction, classes, path, ignore_index):
+    palette = torch.tensor([ImageColor.getrgb(classes[i].color) for i in sorted(classes, key=int)], dtype=torch.uint8)
+    rgb = Image.fromarray(image.permute(1, 2, 0).numpy())
+    panels = [('RGB', rgb)]
+    for title, labels in [('Ground truth', target), ('Prediction', prediction)]:
+        colors = palette[labels.clamp_min(0)].clone()
+        colors[target == ignore_index] = 128
+        panels.append((title, Image.fromarray(colors.numpy())))
+    width, height = 768, round(rgb.height * 768 / rgb.width)
+    canvas = Image.new('RGB', (3 * width, height + 100), 'white')
+    draw = ImageDraw.Draw(canvas)
+    for i, (title, panel) in enumerate(panels):
+        canvas.paste(panel.resize((width, height), Image.Resampling.NEAREST), (i * width, 30))
+        draw.text((i * width + 10, 8), title, fill='black')
+    for i, cls in enumerate([classes[k] for k in sorted(classes, key=int)]):
+        x = i * 280 + 10
+        draw.rectangle((x, height + 45, x + 15, height + 60), fill=cls.color)
+        draw.text((x + 22, height + 45), cls.name, fill='black')
+    draw.text((10, height + 75), 'Gray = ignored label (excluded from metrics)', fill='black')
+    canvas.save(path)
 
 
 @torch.inference_mode()
@@ -102,6 +124,9 @@ def main():
             if args.diagnostic:
                 print('  true pixels:', torch.bincount(target[valid], minlength=n).tolist())
                 print('  predicted pixels:', torch.bincount(prediction[valid], minlength=n).tolist())
+                name = Path(batch['name'][0]).stem
+                save_preview(image, target, prediction, cfg.classes,
+                             output_dir / f'{num_images:02d}_{name}.png', cfg.ignore_index)
 
     tp = confusion.diag().double()
     support, predicted = confusion.sum(1), confusion.sum(0)
