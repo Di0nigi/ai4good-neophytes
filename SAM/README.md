@@ -63,3 +63,27 @@ containing full-precision metrics, per-class support, the confusion matrix
 (true classes in rows, predictions in columns), and run settings. Set
 `--output-dir /path/to/results` to change the results root. Pixel predictions
 are not saved.
+
+## Binary segmentation without class argmax
+
+```bash
+python SAM/SAM_binary.py --data neophytes_split_cv1_test --device cuda
+```
+
+`infer_masks` in `SAM_binary.py` returns a binary union and the retained instance
+masks/scores. The script evaluates the entire selected test split, merging ground
+truth classes 1–6 into foreground and excluding ignored labels. By default it
+uses one generic `plant` prompt. Other vegetation is still dataset background,
+so detecting it counts as a false positive; this is not an all-vegetation ground truth.
+Use `--prompts "Buddleja davidii" "Rhus typhina" "Reynoutria japonica" "Bunias orientalis" "Senecio inaequidens" "Ailanthus altissima"`
+to union species-prompt detections instead, still without class competition.
+
+Results go to `SAM/binary_results/<timestamp>_<data>/`: `metrics.json` contains
+binary F1, IoU, precision, recall, accuracy, confusion matrix (true rows,
+predicted columns), source paths and detection confidences. `masks/` contains
+one full-resolution binary PNG per evaluated image (0 background, 255 predicted
+foreground). Fifty randomly selected images also receive RGB / ground-truth / prediction
+comparison previews; change the count with `--previews` and selection with `--seed`
+(default 42). If fewer images are evaluated, all receive previews. Each manifest
+entry records its preview filename when selected. Use `--max-images 10` for a short smoke test. Preview selection here
+does not filter for labeled foreground, and the full run includes background-only tiles.

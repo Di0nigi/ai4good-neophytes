@@ -72,6 +72,10 @@ def predict(model, processor, image, prompts, threshold, debug=False):
     return torch.stack(class_scores).argmax(0).cpu()
 
 
+
+
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--data', default='neophytes_split_cv1_test')
