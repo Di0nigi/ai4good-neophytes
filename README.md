@@ -108,6 +108,57 @@ Nothing forces you to use them combined, `in_channels` can just as well ask for 
 > Weighted sampling and few-shot selection use it, so they never have to open a tile to know what is inside.
 > Regenerate it after adding / modifying tiles with `dataset_stats.py`
 
+### Download a small local subset over SSH
+
+From the repository root, preview the transfer first (metadata only):
+
+```bash
+python download_subset.py --host USER@SERVER --remote-root /absolute/path/to/Neophytes --dry-run
+```
+
+Remove `--dry-run` to download. SSH config aliases also work. Python 3.9+ is
+required locally and on the server; no extra Python packages are needed. The
+script downloads **at most 100 RGB tiles total**, spread across splits and sites,
+with their masks and available DSM/DTM tiles. Use `--count 30` for fewer images.
+The printed size includes companion rasters, which can still be substantial.
+
+The default destination is `../data/Neophytes`. Its year/site/split/layer tree
+and original filenames are preserved. The script refuses a nonempty destination,
+so repeated runs cannot silently accumulate images. An interrupted transfer may
+leave partial files; use a new empty destination for the next attempt.
+
+`stats_imagewise.csv` contains only the downloaded tiles, with image and mask
+paths rewritten to their absolute local locations. Other CSVs are copied in their
+original locations unchanged (they may still describe the full dataset). A blank
+`S_inaequidens_px` header in the supplied statistics is repaired in the local copy.
+
+**Use the generated `subset_paths.yaml` overrides**: the loader matches CSV paths
+exactly, so relative paths from the original configs will not match these absolute
+paths. This launcher applies the local paths while retaining the normal local
+split transforms, classes, and model defaults:
+
+```bash
+python - <<'PYTHON'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+paths = json.loads(Path('../data/Neophytes/subset_paths.yaml').read_text())
+overrides = [f'data.dataset_stats={json.dumps(paths["dataset_stats"])}']
+for split, folders in paths['image_dir'].items():
+    overrides.append(f'data.image_dir.{split}={json.dumps(folders)}')
+subprocess.run([sys.executable, 'train.py',
+                'data=neophytes_split_local_train_1024',
+                'data.num_workers=0', 'data.batch_size_train=1',
+                *overrides], check=True)
+PYTHON
+```
+
+For direct dataset/datamodule use, read the same file as YAML (or JSON) and pass
+`image_dir` and `dataset_stats` to the existing constructors. This small subset is
+for local debugging; it does not reproduce full-data evaluation or CV folds.
+
 ### 2.2 Citizen-science data
 
 Two additional sources are provided as raw material. Whether and how to use them is up to you.
