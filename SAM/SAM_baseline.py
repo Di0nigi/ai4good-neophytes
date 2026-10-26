@@ -23,9 +23,12 @@ from datasets.neophyte_datamodule import NeophyteDataModule
 from utils.transform_utils import get_transforms
 
 FULL_NAMES = {
-    'B. davidii': 'Buddleja davidii', 'R. typhina': 'Rhus typhina',
-    'R. japonica': 'Reynoutria japonica', 'B. orientalis': 'Bunias orientalis',
-    'S. inaequidens': 'Senecio inaequidens', 'A. altissima': 'Ailanthus altissima',
+    'B. davidii': 'Buddleja davidii',
+    'R. typhina': 'Rhus typhina',
+    'R. japonica': 'Reynoutria japonica',
+    'B. orientalis': 'Bunias orientalis',
+    'S. inaequidens': 'Senecio inaequidens',
+    'A. altissima': 'Ailanthus altissima',
 }
 
 
