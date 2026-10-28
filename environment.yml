@@ -22,11 +22,15 @@ dependencies:
   - tqdm
   - pip:
       - --extra-index-url https://download.pytorch.org/whl/cu121
+      - --find-links https://data.pyg.org/whl/torch-2.5.1+cu121.html
       - torch==2.5.1+cu121
       - torchvision==0.20.1+cu121
       - pytorch-lightning==2.5.2
       - torchmetrics==1.8.0
       - segmentation-models-pytorch==0.5.0
+      - pyg_lib
+      - torch_scatter
+      - torch_sparse
       - timm==1.0.19
       - huggingface_hub<1.0  # timm downloads the pretrained encoder weights through it
       - albumentations==2.0.8
