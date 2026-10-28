@@ -122,7 +122,7 @@ class HybridResNet18GNN(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hparams.learning_rate,
+            lr=1e-3,
             weight_decay=1e-4,
         )
         return optimizer
