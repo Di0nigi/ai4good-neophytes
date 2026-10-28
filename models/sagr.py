@@ -90,9 +90,6 @@ class HybridResNet18GNN(pl.LightningModule):
         logits = self(batch.x, batch.edge_index)
         valid = batch.y >= 0
 
-        if not valid.any():
-            raise ValueError(f"{stage} batch contains no labeled graph nodes.")
-
         loss = F.cross_entropy(
             logits[valid],
             batch.y[valid],
