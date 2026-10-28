@@ -33,15 +33,14 @@ def main():
         val_records=test_dict,
         class_values=class_values,
         cache_dir="./graph_cache",
-        batch_size=4,
+        batch_size=32,
         num_workers=4,
         graph_kwargs={
             "image_bands": (1, 2, 3),
             "image_scale": 255.0,
             "felz_scale": 100,
-            "felz_sigma": 0.5,
-            "felz_min_size": 20,
-            "min_labeled_fraction": 0.25,
+            "felz_sigma": 0.3,
+            "felz_min_size": 10,
         },
     )
 
@@ -61,7 +60,7 @@ def main():
     )
     logger = CSVLogger("./", name="graph_log.csv")
     trainer = pl.Trainer(
-        max_epochs=200,
+        max_epochs=10,
         logger=logger,
     )
 
