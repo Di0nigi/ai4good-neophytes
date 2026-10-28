@@ -1,3 +1,4 @@
+import lightning.pytorch as pl
 import torch
 import torch.nn.functional as F
 from torch.nn import BatchNorm1d, Linear, ReLU
@@ -32,7 +33,7 @@ class HybridResNetBlock(torch.nn.Module):
         return out
 
 
-class HybridResNet18GNN(torch.nn.Module):
+class HybridResNet18GNN(pl.LightningModule):
     def __init__(
         self, in_channels, num_classes, hidden_channels=64, class_weights=None
     ):
