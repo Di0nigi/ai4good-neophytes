@@ -35,11 +35,11 @@ def main(cfg: DictConfig) -> None:
     import pytorch_lightning as pl
     import torch
     import torch.multiprocessing
-    from models.graph import HybridResNet18GNN
     from pytorch_lightning import seed_everything
     from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
     from datasets.graph_data import NeophyteGraphDataset
+    from models.sagr import HybridResNet18GNN
     from utils.callback_utils import get_callbacks
     from utils.transform_utils import get_transforms
 
