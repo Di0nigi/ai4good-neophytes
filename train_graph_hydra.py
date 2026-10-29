@@ -117,9 +117,13 @@ def main(cfg: DictConfig) -> None:
     # # sanity check: one batch through the pipeline before the model is built
     batch = next(iter(dataModule.train_dataloader()))
     print(batch)
+    example = dataModule.train_dataset[0]
+    in_channels = example.x.shape[1]
+
+
     # %% model
     model = HybridResNet18GNN(
-        in_channels=cfg.model.in_channels,
+        in_channels=in_channels,
         num_classes=cfg.model.num_classes,
         lr=cfg.model.lr
     )
