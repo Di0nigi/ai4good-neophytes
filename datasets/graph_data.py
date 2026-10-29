@@ -495,6 +495,11 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             self.val_dataset = self._make_graph_dataset(
                 self.image_dirs.val, self.transform_val
             )
+        
+        if stage in ("test", None):
+            self.test_dataset = self._make_graph_dataset(
+                self.image_dirs.test, self.transform_test
+            )
 
             if self.weighted_sampling:
                 self.sampler = WeightedRandomSampler(
