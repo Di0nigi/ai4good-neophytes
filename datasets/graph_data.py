@@ -507,13 +507,9 @@ class NeophyteGraphDataModule(NeophyteDataModule):
                 )
 
     def train_dataloader(self):
-        kwargs = dict(
-            batch_size=self.batch_size_train,
-            num_workers=self.num_workers,
-        )
         if self.weighted_sampling:
-            return DataLoader(self.train_dataset,num_workers=self.num_workers, sampler=self.sampler, persistent_workers=self.num_workers > 0, **kwargs)
-        return DataLoader(self.train_dataset, num_workers=self.num_workers, shuffle=True, persistent_workers=self.num_workers > 0, **kwargs)
+            return DataLoader(self.train_dataset,num_workers=self.num_workers, sampler=self.sampler, persistent_workers=self.num_workers > 0)
+        return DataLoader(self.train_dataset, num_workers=self.num_workers, shuffle=True, persistent_workers=self.num_workers > 0)
 
 
     def test_dataloader(self):
