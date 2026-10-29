@@ -17,7 +17,7 @@ from torch_geometric.loader import DataLoader
 
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
-
+from torch_geometric.loader import DataLoader as GraphDataLoader
 
 def read_aligned_raster(path, reference, bands=None):
     """Read a raster and check that it matches the image tile's grid."""
@@ -494,11 +494,6 @@ class NeophyteGraphDataModule(NeophyteDataModule):
                 self.image_dirs.val, self.transform_val
             )
 
-        if stage in ("test", None):
-            self.test_dataset = self._make_graph_dataset(
-                self.image_dirs.test, self.transform_test
-            )
-
             if self.weighted_sampling:
                 self.sampler = WeightedRandomSampler(
                     self.train_dataset.sample_weights,
@@ -506,40 +501,54 @@ class NeophyteGraphDataModule(NeophyteDataModule):
                     replacement=True,
                 )
 
-    def train_dataloader(self):
-        if self.weighted_sampling:
-            return DataLoader(
-                self.train_dataset,
-                num_workers=self.num_workers,
-                sampler=self.sampler,
-                persistent_workers=True,
-                prefetch_factor=4,
-                pin_memory=True,
+        if stage in ("test", None):
+            self.test_dataset = self._make_graph_dataset(
+                self.image_dirs.test, self.transform_test
             )
-        return DataLoader(
-            self.train_dataset,
+
+
+    def train_dataloader(self):
+        kwargs = dict(
+            batch_size=self.batch_size_train,
             num_workers=self.num_workers,
-            shuffle=True,
-            persistent_workers=True,
-            prefetch_factor=4,
-            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=False,  # turn on later if needed
         )
 
-    def test_dataloader(self):
-        return DataLoader(
-            self.test_dataloader,
-            batch_size=self.batch_size_test,
-            shuffle=False,
-            num_workers=self.num_workers,
+        if self.num_workers > 0:
+            kwargs["prefetch_factor"] = 1
+
+        if self.weighted_sampling:
+            return GraphDataLoader(
+                self.train_dataset, sampler=self.sampler, **kwargs
+            )
+
+        return GraphDataLoader(
+            self.train_dataset, shuffle=True, **kwargs
         )
+
 
     def val_dataloader(self):
-        return DataLoader(
-            self.val_dataset,
+        kwargs = dict(
             batch_size=self.batch_size_val,
             shuffle=False,
             num_workers=self.num_workers,
-            persistent_workers=True,
-            prefetch_factor=4,
-            pin_memory=True,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=False,
+        )
+
+        if self.num_workers > 0:
+            kwargs["prefetch_factor"] = 1
+
+        return GraphDataLoader(self.val_dataset, **kwargs)
+
+
+    def test_dataloader(self):
+        return GraphDataLoader(
+            self.test_dataset,
+            batch_size=self.batch_size_test,
+            shuffle=False,
+            num_workers=self.num_workers,
+            persistent_workers=self.num_workers > 0,
+            pin_memory=False,
         )
