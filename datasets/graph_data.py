@@ -310,7 +310,6 @@ class TileGraphDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True,
             persistent_workers=self.num_workers > 0,
         )
 
@@ -320,7 +319,6 @@ class TileGraphDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=False,
             num_workers=self.num_workers,
-            pin_memory=True,
             persistent_workers=self.num_workers > 0,
         )
 
@@ -514,8 +512,18 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             num_workers=self.num_workers,
         )
         if self.weighted_sampling:
-            return DataLoader(self.train_dataset, sampler=self.sampler, **kwargs)
-        return DataLoader(self.train_dataset, shuffle=True, **kwargs)
+            return DataLoader(self.train_dataset,num_workers=self.num_workers, sampler=self.sampler, persistent_workers=self.num_workers > 0, **kwargs)
+        return DataLoader(self.train_dataset, num_workers=self.num_workers, shuffle=True, persistent_workers=self.num_workers > 0, **kwargs)
+
+
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataloader,
+            batch_size=self.batch_size_test,
+            shuffle=False,
+            num_workers=self.num_workers,
+            persistent_workers=self.num_workers > 0
+        )
 
     def val_dataloader(self):
         return DataLoader(
@@ -523,4 +531,5 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             batch_size=self.batch_size_val,
             shuffle=False,
             num_workers=self.num_workers,
+            persistent_workers=self.num_workers > 0
         )
