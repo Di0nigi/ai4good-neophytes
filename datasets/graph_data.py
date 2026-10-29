@@ -493,7 +493,7 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             self.val_dataset = self._make_graph_dataset(
                 self.image_dirs.val, self.transform_val
             )
-        
+
         if stage in ("test", None):
             self.test_dataset = self._make_graph_dataset(
                 self.image_dirs.test, self.transform_test
@@ -508,9 +508,22 @@ class NeophyteGraphDataModule(NeophyteDataModule):
 
     def train_dataloader(self):
         if self.weighted_sampling:
-            return DataLoader(self.train_dataset,num_workers=self.num_workers, sampler=self.sampler, persistent_workers=self.num_workers > 0)
-        return DataLoader(self.train_dataset, num_workers=self.num_workers, shuffle=True, persistent_workers=self.num_workers > 0)
-
+            return DataLoader(
+                self.train_dataset,
+                num_workers=self.num_workers,
+                sampler=self.sampler,
+                persistent_workers=True,
+                prefetch_factor=4,
+                pin_memory=True,
+            )
+        return DataLoader(
+            self.train_dataset,
+            num_workers=self.num_workers,
+            shuffle=True,
+            persistent_workers=True,
+            prefetch_factor=4,
+            pin_memory=True,
+        )
 
     def test_dataloader(self):
         return DataLoader(
@@ -518,7 +531,6 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             batch_size=self.batch_size_test,
             shuffle=False,
             num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0
         )
 
     def val_dataloader(self):
@@ -527,5 +539,7 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             batch_size=self.batch_size_val,
             shuffle=False,
             num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0
+            persistent_workers=True,
+            prefetch_factor=4,
+            pin_memory=True,
         )
