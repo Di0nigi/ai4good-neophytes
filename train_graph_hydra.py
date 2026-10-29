@@ -38,7 +38,7 @@ def main(cfg: DictConfig) -> None:
     from pytorch_lightning import seed_everything
     from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
-    from datasets.graph_data import NeophyteGraphDataModule
+    from datasets.graph_data import NeophyteGraphDataModule, NeophyteDataset
     from models.sagr import HybridResNet18GNN
     from utils.callback_utils import get_callbacks
     from utils.transform_utils import get_transforms
@@ -119,11 +119,31 @@ def main(cfg: DictConfig) -> None:
     example = dataModule.train_dataset[0]
     in_channels = example.x.shape[1]
 
+    loader = NeophyteDataset(
+        dataModule.train_dataset,
+        batch_size=1,
+        num_workers=1,
+        persistent_workers=False,
+        prefetch_factor=1,
+        pin_memory=False,
+    )
+
+    for batch in loader:
+        print(batch)
+        break
+
+    for i in range(len(dataModule.train_dataset)):
+        try:
+            graph = dataModule.train_dataset[i]
+            print("OK", i, graph.num_nodes)
+        except Exception:
+            print("FAILED sample:", i)
+
 
     # %% model
     model = HybridResNet18GNN(
         in_channels=in_channels,
-        num_classes=cfg.model.num_classes,
+        num_classes=6,
         lr=cfg.model.lr
     )
 
