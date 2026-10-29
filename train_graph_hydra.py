@@ -102,9 +102,8 @@ def main(cfg: DictConfig) -> None:
         num_workers=cfg.data.num_workers,
         graph_kwargs={
             "felz_scale": 100,
-            "felz_sigma": 0.5,
-            "felz_min_size": 20,
-            "min_labeled_fraction": 0.25,
+            "felz_sigma": 0.4,
+            "felz_min_size": 30,
         },
     )
 
