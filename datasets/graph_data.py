@@ -15,6 +15,8 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
+from datasets.neophyte_dataset import NeophyteDataset
+
 
 def read_aligned_raster(path, reference, bands=None):
     """Read a raster and check that it matches the image tile's grid."""
@@ -241,9 +243,7 @@ class TileGraphDataset(Dataset):
             "classes": self.class_values,
             "kwargs": self.graph_kwargs,
         }
-        key = hashlib.sha1(
-            json.dumps(key_data, sort_keys=True).encode()
-        ).hexdigest()
+        key = hashlib.sha1(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
         return self.cache_dir / f"{key}.pt"
 
     def __getitem__(self, index):
@@ -321,4 +321,129 @@ class TileGraphDataModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             pin_memory=True,
             persistent_workers=self.num_workers > 0,
+        )
+
+
+def _as_numpy(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def _image_hwc(value):
+    """Convert a 3-channel image tensor/array to HWC."""
+    image = _as_numpy(value)
+
+    if image.ndim != 3:
+        raise ValueError(f"Expected a 3-D image, got shape {image.shape}.")
+
+    # ToTensorV2 commonly returns CHW; the dataset may also return HWC.
+    if image.shape[0] in (1, 3, 4) and image.shape[-1] not in (1, 3, 4):
+        image = np.moveaxis(image, 0, -1)
+
+    if image.shape[-1] != 3:
+        raise ValueError(f"Expected an RGB image, got shape {image.shape}.")
+
+    return image.astype(np.float32, copy=False)
+
+
+def _raster_hw(value):
+    """Convert a single-band raster tensor/array to HW."""
+    raster = _as_numpy(value)
+
+    if raster.ndim == 3:
+        if raster.shape[0] == 1:  # CHW
+            raster = raster[0]
+        elif raster.shape[-1] == 1:  # HWC
+            raster = raster[..., 0]
+        else:
+            raise ValueError(f"Expected a single-band raster, got {raster.shape}.")
+
+    if raster.ndim != 2:
+        raise ValueError(f"Expected a 2-D raster, got shape {raster.shape}.")
+
+    return raster.astype(np.float32, copy=False)
+
+
+class NeophyteGraphDataset(NeophyteDataset):
+    """
+    Uses NeophyteDataset's file discovery, loading, mapping, and transforms,
+    then converts each transformed tile into a PyG graph.
+    """
+
+    def __init__(
+        self,
+        *args,
+        graph_class_values=None,
+        graph_kwargs=None,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        # These must match the pixel values in the mask returned by
+        # NeophyteDataset, after its value_mapping has been applied.
+        self.graph_class_values = (
+            list(range(self.num_classes))
+            if graph_class_values is None
+            else list(graph_class_values)
+        )
+        self.graph_kwargs = graph_kwargs or {}
+
+    def __getitem__(self, idx):
+        # The parent handles repo-style loading, value mapping, auxiliary data,
+        # DSM/DTM/nDSM, and the joint image/mask transforms.
+        sample = super().__getitem__(idx)
+
+        image = _image_hwc(sample["image"])
+        mask = _as_numpy(sample["mask"]).astype(np.int64, copy=False)
+
+        if mask.ndim == 3 and mask.shape[0] == 1:
+            mask = mask[0]
+        if mask.ndim == 3 and mask.shape[-1] == 1:
+            mask = mask[..., 0]
+
+        if image.shape[:2] != mask.shape:
+            raise ValueError(
+                f"Image/mask dimensions differ for {sample.get('name', idx)}: "
+                f"{image.shape[:2]} vs {mask.shape}."
+            )
+
+        # Add whichever optional raster channels the parent returned.
+        extra_rasters = []
+        for key in ("dsm", "dtm", "ndsm"):
+            if key in sample:
+                raster = _raster_hw(sample[key])
+                if raster.shape != mask.shape:
+                    raise ValueError(
+                        f"{key} shape {raster.shape} does not match mask "
+                        f"shape {mask.shape} for {sample.get('name', idx)}."
+                    )
+                extra_rasters.append(raster)
+
+        segments = felzenszwalb(
+            image,
+            scale=self.graph_kwargs.get("felz_scale", 100),
+            sigma=self.graph_kwargs.get("felz_sigma", 0.5),
+            min_size=self.graph_kwargs.get("felz_min_size", 20),
+            channel_axis=-1,
+        )
+
+        # Ensure node IDs are exactly 0 ... N-1.
+        _, segments = np.unique(segments, return_inverse=True)
+        segments = segments.reshape(mask.shape).astype(np.int64)
+
+        x = extract_node_features(image, segments, extra_rasters)
+        y = make_node_labels(
+            mask,
+            segments,
+            {int(v): i for i, v in enumerate(self.graph_class_values)},
+            min_labeled_fraction=self.graph_kwargs.get("min_labeled_fraction", 0.25),
+        )
+        edge_index = make_adjacency(segments)
+
+        return Data(
+            x=torch.from_numpy(x),
+            edge_index=edge_index,
+            y=torch.from_numpy(y),
+            num_nodes=x.shape[0],
         )

@@ -35,7 +35,12 @@ class HybridResNetBlock(torch.nn.Module):
 
 class HybridResNet18GNN(pl.LightningModule):
     def __init__(
-        self, in_channels, num_classes, hidden_channels=64, class_weights=None
+        self,
+        in_channels,
+        num_classes,
+        hidden_channels=64,
+        class_weights=None,
+        lr: float = 1e-3,
     ):
         super(HybridResNet18GNN, self).__init__()
         self.initial_conv = SAGEConv(in_channels, hidden_channels)
@@ -92,7 +97,7 @@ class HybridResNet18GNN(pl.LightningModule):
 
         if not valid.any():
             print(f"{stage} batch contains no labeled graph nodes.")
-            return 
+            return
 
         loss = F.cross_entropy(
             logits[valid],
@@ -123,7 +128,7 @@ class HybridResNet18GNN(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=1e-3,
+            lr=self.lr,
             weight_decay=1e-4,
         )
         return optimizer
