@@ -69,11 +69,11 @@ def main(cfg: DictConfig) -> None:
     ndsm_transforms = get_transforms(cfg.data.ndsm_transforms, toTensor=False)
 
     dataModule = NeophyteGraphDataset(
-        cfg.data.image_dir,
-        cfg.data.classes,
-        train_transforms,
-        val_transforms,
-        test_transforms,
+        image_dirs=cfg.data.image_dir,
+        classes=cfg.data.classes,
+        transform_train=train_transforms,
+        transform_val=val_transforms,
+        transform_test=test_transforms,
         dsm_transform=dsm_transforms,
         ndsm_transform=ndsm_transforms,
         dataset_stats=cfg.data.dataset_stats,
