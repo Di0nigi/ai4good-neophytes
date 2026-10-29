@@ -38,7 +38,7 @@ def main(cfg: DictConfig) -> None:
     from pytorch_lightning import seed_everything
     from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
-    from datasets.graph_data import NeophyteGraphDataset
+    from datasets.graph_data import NeophyteGraphDataModule
     from models.sagr import HybridResNet18GNN
     from utils.callback_utils import get_callbacks
     from utils.transform_utils import get_transforms
@@ -68,7 +68,7 @@ def main(cfg: DictConfig) -> None:
     dsm_transforms = get_transforms(cfg.data.dsm_transforms, toTensor=False)
     ndsm_transforms = get_transforms(cfg.data.ndsm_transforms, toTensor=False)
 
-    dataModule = NeophyteGraphDataset(
+    dataModule = NeophyteGraphDataModule(
         image_dirs=cfg.data.image_dir,
         classes=cfg.data.classes,
         transform_train=train_transforms,

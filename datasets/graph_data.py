@@ -11,10 +11,11 @@ import rasterio
 import torch
 from skimage.measure import regionprops
 from skimage.segmentation import felzenszwalb
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, WeightedRandomSampler
 from torch_geometric.data import Data
 from torch_geometric.loader import DataLoader
 
+from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
 
 
@@ -390,8 +391,6 @@ class NeophyteGraphDataset(NeophyteDataset):
         self.graph_kwargs = graph_kwargs or {}
 
     def __getitem__(self, idx):
-        # The parent handles repo-style loading, value mapping, auxiliary data,
-        # DSM/DTM/nDSM, and the joint image/mask transforms.
         sample = super().__getitem__(idx)
 
         image = _image_hwc(sample["image"])
@@ -446,4 +445,77 @@ class NeophyteGraphDataset(NeophyteDataset):
             edge_index=edge_index,
             y=torch.from_numpy(y),
             num_nodes=x.shape[0],
+        )
+
+
+class NeophyteGraphDataModule(NeophyteDataModule):
+    def __init__(self, *args, graph_class_values=None, graph_kwargs=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.graph_class_values = graph_class_values
+        self.graph_kwargs = graph_kwargs or {}
+
+    def _make_graph_dataset(self, image_dirs, transform, training=False):
+        kwargs = dict(
+            transform=transform,
+            dsm_transform=self.dsm_transform,
+            ndsm_transform=self.ndsm_transform,
+            dataset_stats=self.dataset_stats,
+            value_mapping=self.value_mapping,
+            ignore_index=self.ignore_index,
+            load_auxiliary=self.load_auxiliary,
+            load_dsm=self.load_dsm,
+            load_dtm=self.load_dtm,
+            load_ndsm=self.load_ndsm,
+            load_into_ram=self.load_into_ram,
+            preload_workers=self.num_workers,
+            graph_class_values=self.graph_class_values,
+            graph_kwargs=self.graph_kwargs,
+        )
+
+        if training:
+            kwargs.update(
+                weighted_sampling=self.weighted_sampling,
+                cap_quantile=self.cap_quantile,
+                lift_quantile=self.lift_quantile,
+                bg_fraction=self.bg_fraction,
+                min_strat_images=self.min_strat_images,
+                few_shot_k=self.few_shot_k,
+                few_shot_mode=self.few_shot_mode,
+                few_shot_bg_k=self.few_shot_bg_k,
+                max_nodata_frac=self.max_nodata_frac,
+            )
+
+        return NeophyteGraphDataset(image_dirs, self.classes, **kwargs)
+
+    def setup(self, stage=None):
+        if stage in ("fit", None):
+            self.train_dataset = self._make_graph_dataset(
+                self.image_dirs.train, self.transform_train, training=True
+            )
+            self.val_dataset = self._make_graph_dataset(
+                self.image_dirs.val, self.transform_val
+            )
+
+            if self.weighted_sampling:
+                self.sampler = WeightedRandomSampler(
+                    self.train_dataset.sample_weights,
+                    num_samples=len(self.train_dataset),
+                    replacement=True,
+                )
+
+    def train_dataloader(self):
+        kwargs = dict(
+            batch_size=self.batch_size_train,
+            num_workers=self.num_workers,
+        )
+        if self.weighted_sampling:
+            return DataLoader(self.train_dataset, sampler=self.sampler, **kwargs)
+        return DataLoader(self.train_dataset, shuffle=True, **kwargs)
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.val_dataset,
+            batch_size=self.batch_size_val,
+            shuffle=False,
+            num_workers=self.num_workers,
         )
