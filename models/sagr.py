@@ -43,6 +43,7 @@ class HybridResNet18GNN(pl.LightningModule):
         lr: float = 1e-3,
     ):
         super(HybridResNet18GNN, self).__init__()
+        self.lr = lr
         self.initial_conv = SAGEConv(in_channels, hidden_channels)
         self.initial_bn = BatchNorm1d(hidden_channels)
         self.initial_relu = ReLU(inplace=False)
