@@ -17,7 +17,7 @@ from torch_geometric.loader import DataLoader
 
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
-from torch_geometric.loader import DataLoader as GraphDataLoader
+from torch_geometric.loader import DataListLoader as GraphDataLoader
 
 def read_aligned_raster(path, reference, bands=None):
     """Read a raster and check that it matches the image tile's grid."""
@@ -506,42 +506,39 @@ class NeophyteGraphDataModule(NeophyteDataModule):
                 self.image_dirs.test, self.transform_test
             )
 
-
     def train_dataloader(self):
-        kwargs = dict(
-            batch_size=self.batch_size_train,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
-            pin_memory=False,  # turn on later if needed
-        )
-
+        kwargs = {
+            'batch_size': self.batch_size_train,
+            'num_workers': self.num_workers,
+            'persistent_workers': self.num_workers > 0,
+            'pin_memory': False,
+        }
         if self.num_workers > 0:
-            kwargs["prefetch_factor"] = 1
+            kwargs['prefetch_factor'] = 2
 
         if self.weighted_sampling:
-            return GraphDataLoader(
-                self.train_dataset, sampler=self.sampler, **kwargs
+            return 
+            GraphDataLoader(
+                self.train_dataset,
+                sampler=self.sampler,
+                **kwargs
             )
-
         return GraphDataLoader(
-            self.train_dataset, shuffle=True, **kwargs
+            self.train_dataset,
+            shuffle=True,
+            **kwargs
         )
 
-
     def val_dataloader(self):
-        kwargs = dict(
+        return GraphDataLoader(
+            self.val_dataset,
             batch_size=self.batch_size_val,
             shuffle=False,
             num_workers=self.num_workers,
             persistent_workers=self.num_workers > 0,
             pin_memory=False,
+            prefetch_factor=2 if self.num_workers > 0 else None,
         )
-
-        if self.num_workers > 0:
-            kwargs["prefetch_factor"] = 1
-
-        return GraphDataLoader(self.val_dataset, **kwargs)
-
 
     def test_dataloader(self):
         return GraphDataLoader(
