@@ -11,13 +11,12 @@ import rasterio
 import torch
 from skimage.measure import regionprops
 from skimage.segmentation import felzenszwalb
-from torch.utils.data import Dataset, WeightedRandomSampler
-from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
+from torch.utils.data import Dataset, WeightedRandomSampler, DataLoader as TorchDataLoader
+from torch_geometric.data import Data, Batch
+from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
-from torch_geometric.loader import DataListLoader as GraphDataLoader
 
 def read_aligned_raster(path, reference, bands=None):
     """Read a raster and check that it matches the image tile's grid."""
@@ -304,22 +303,41 @@ class TileGraphDataModule(pl.LightningDataModule):
             self.graph_kwargs,
         )
 
+    def _get_loader_kwargs(self, shuffle=False):
+        """Get DataLoader kwargs with proper multiprocessing support."""
+        kwargs = {
+            'batch_size': self.batch_size,
+            'num_workers': self.num_workers,
+            'persistent_workers': self.num_workers > 0,
+            'pin_memory': False,
+            'shuffle': shuffle,
+        }
+        
+        if self.num_workers > 0:
+            kwargs['prefetch_factor'] = 2
+            # Use 'fork' on Linux, 'spawn' on other platforms
+            import sys
+            kwargs['multiprocessing_context'] = 'spawn' if sys.platform != 'linux' else 'fork'
+        
+        return kwargs
+
+    def _collate_graphs(self, batch):
+        """Collate function that batches PyG Data objects into a Batch."""
+        # Batch can handle variable-sized graphs
+        return Batch.from_data_list(batch)
+
     def train_dataloader(self):
-        return DataLoader(
+        return TorchDataLoader(
             self.train_dataset,
-            batch_size=self.batch_size,
-            shuffle=True,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
+            collate_fn=self._collate_graphs,
+            **self._get_loader_kwargs(shuffle=True)
         )
 
     def val_dataloader(self):
-        return DataLoader(
+        return TorchDataLoader(
             self.val_dataset,
-            batch_size=self.batch_size,
-            shuffle=False,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
+            collate_fn=self._collate_graphs,
+            **self._get_loader_kwargs()
         )
 
 
@@ -506,46 +524,56 @@ class NeophyteGraphDataModule(NeophyteDataModule):
                 self.image_dirs.test, self.transform_test
             )
 
-    def train_dataloader(self):
+    def _get_loader_kwargs(self, shuffle=False, sampler=None, batch_size=None):
+        """Get DataLoader kwargs with proper multiprocessing support."""
+        bs = batch_size if batch_size is not None else self.batch_size_train
         kwargs = {
-            'batch_size': self.batch_size_train,
+            'batch_size': bs,
             'num_workers': self.num_workers,
             'persistent_workers': self.num_workers > 0,
             'pin_memory': False,
+            'shuffle': shuffle and sampler is None,
         }
+        
         if self.num_workers > 0:
             kwargs['prefetch_factor'] = 2
+            # Use 'fork' on Linux, 'spawn' on other platforms
+            import sys
+            kwargs['multiprocessing_context'] = 'spawn' if sys.platform != 'linux' else 'fork'
+        
+        if sampler is not None:
+            kwargs['sampler'] = sampler
+        
+        return kwargs
 
+    def _collate_graphs(self, batch):
+        """Collate function that batches PyG Data objects into a Batch."""
+        # Batch can handle variable-sized graphs
+        return Batch.from_data_list(batch)
+
+    def train_dataloader(self):
         if self.weighted_sampling:
-            return 
-            GraphDataLoader(
+            return TorchDataLoader(
                 self.train_dataset,
-                sampler=self.sampler,
-                **kwargs
+                collate_fn=self._collate_graphs,
+                **self._get_loader_kwargs(sampler=self.sampler, batch_size=self.batch_size_train)
             )
-        return GraphDataLoader(
+        return TorchDataLoader(
             self.train_dataset,
-            shuffle=True,
-            **kwargs
+            collate_fn=self._collate_graphs,
+            **self._get_loader_kwargs(shuffle=True, batch_size=self.batch_size_train)
         )
 
     def val_dataloader(self):
-        return GraphDataLoader(
+        return TorchDataLoader(
             self.val_dataset,
-            batch_size=self.batch_size_val,
-            shuffle=False,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
-            pin_memory=False,
-            prefetch_factor=2 if self.num_workers > 0 else None,
+            collate_fn=self._collate_graphs,
+            **self._get_loader_kwargs(batch_size=self.batch_size_val)
         )
 
     def test_dataloader(self):
-        return GraphDataLoader(
+        return TorchDataLoader(
             self.test_dataset,
-            batch_size=self.batch_size_test,
-            shuffle=False,
-            num_workers=self.num_workers,
-            persistent_workers=self.num_workers > 0,
-            pin_memory=False,
+            collate_fn=self._collate_graphs,
+            **self._get_loader_kwargs(batch_size=self.batch_size_test)
         )
