@@ -118,15 +118,13 @@ def main(cfg: DictConfig) -> None:
     print(batch)
     example = dataModule.train_dataset[0]
     in_channels = example.x.shape[1]
+    loader = dataModule.train_dataloader()
+    print("loader created")
 
-    for i in range(len(dataModule.train_dataset)):
-        try:
-            graph = dataModule.train_dataset[i]
-            print("OK", i, graph.num_nodes)
-        except Exception:
-            print("FAILED sample:", i)
-
-
+    for i, batch in enumerate(loader):
+        print("batch", i, batch.num_graphs)
+        if i == 2:
+            break
     # %% model
     model = HybridResNet18GNN(
         in_channels=in_channels,
