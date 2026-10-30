@@ -90,7 +90,7 @@ class HybridResNet18GNN(pl.LightningModule):
         x = self.block8(x, edge_index)
         x = self.fc(x)
 
-        return F.log_softmax(x, dim=1)
+        return x  # Return raw logits, not log_softmax
 
     def _shared_step(self, batch, stage):
         logits = self(batch.x, batch.edge_index)
@@ -100,14 +100,21 @@ class HybridResNet18GNN(pl.LightningModule):
             print(f"{stage} batch contains no labeled graph nodes.")
             return
 
+        # Ensure labels are within valid range
+        num_classes = self.fc.out_features
+        y_valid = batch.y[valid]
+        if (y_valid >= num_classes).any():
+            print(f"Warning: Found labels >= num_classes ({num_classes}). Clamping.")
+            y_valid = torch.clamp(y_valid, max=num_classes - 1)
+        
         loss = F.cross_entropy(
             logits[valid],
-            batch.y[valid],
+            y_valid,
             weight=self.class_weights,
         )
 
         probs = logits[valid].softmax(dim=-1)
-        targets = batch.y[valid]
+        targets = y_valid
 
         if stage == "train":
             self.train_acc.update(probs, targets)
