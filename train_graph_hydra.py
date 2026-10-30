@@ -119,19 +119,6 @@ def main(cfg: DictConfig) -> None:
     example = dataModule.train_dataset[0]
     in_channels = example.x.shape[1]
 
-    loader = NeophyteDataset(
-        dataModule.train_dataset,
-        batch_size=1,
-        num_workers=1,
-        persistent_workers=False,
-        prefetch_factor=1,
-        pin_memory=False,
-    )
-
-    for batch in loader:
-        print(batch)
-        break
-
     for i in range(len(dataModule.train_dataset)):
         try:
             graph = dataModule.train_dataset[i]
