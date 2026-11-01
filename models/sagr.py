@@ -104,7 +104,7 @@ class HybridResNet18GNN(pl.LightningModule):
         num_classes = self.fc.out_features
         y_valid = batch.y[valid]
         if (y_valid >= num_classes).any():
-            print(f"Warning: Found labels >= num_classes ({num_classes}). Clamping.")
+            self.log(f"Warning: Found labels >= num_classes ({num_classes}). Clamping.")
             y_valid = torch.clamp(y_valid, max=num_classes - 1)
         
         loss = F.cross_entropy(
@@ -115,15 +115,19 @@ class HybridResNet18GNN(pl.LightningModule):
 
         probs = logits[valid].softmax(dim=-1)
         targets = y_valid
+        try:
+            batch_size = int(valid.sum())
+        except Exception:
+            batch_size = 0
 
         if stage == "train":
             self.train_acc.update(probs, targets)
-            self.log("train/loss", loss, on_step=False, on_epoch=True)
-            self.log("train/acc", self.train_acc, on_step=False, on_epoch=True)
+            self.log("train/loss", loss, on_step=False, on_epoch=True, batch_size=batch_size)
+            self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, batch_size=batch_size)
         else:
             self.val_acc.update(probs, targets)
-            self.log("val/loss", loss, on_step=False, on_epoch=True)
-            self.log("val/acc", self.val_acc, on_step=False, on_epoch=True)
+            self.log("val/loss", loss, on_step=False, on_epoch=True, batch_size=batch_size)
+            self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, batch_size=batch_size)
 
         return loss
 
