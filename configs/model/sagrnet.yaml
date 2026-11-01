@@ -1,0 +1,5 @@
+defaults:
+  - model
+
+model_name: SAGRNet
+encoder_name: sage_gat18
