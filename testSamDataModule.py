@@ -20,7 +20,7 @@ import sys
 import torch
 from omegaconf import OmegaConf
 
-from datasets.neophyte_dataset import NeophyteDataset
+from samDataSet import SamNeophyteDataset
 from utils.transform_utils import get_transforms
 
 CUTOUTS_CSV = "../data/NeophytesCSCutouts/cutouts.csv"
@@ -80,7 +80,7 @@ def build_dataset(**kwargs):
         [],
     ) if False else None  # smoke test runs without augmentation; dataset handles transform=None
 
-    return NeophyteDataset(
+    return SamNeophyteDataset(
         image_dirs=[IMAGE_DIR],
         classes=CLASSES,
         transform=None,
