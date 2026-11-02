@@ -194,40 +194,47 @@ class SamNeophyteDataset(Dataset):
         if citizen_cutouts_csv:
             self._build_citizen_index(citizen_cutouts_csv)
     # mine
-    def _build_citizen_index(self, csv_path):
-        """Index cutouts by segmentation class using cutouts.csv quality fields."""
+        def _build_citizen_index(self, csv_path):
+        """Index cutouts by segmentation class using cutouts.csv quality fields.
+
+        cutouts.csv covers 53 species; only class_ids 1-6 are segmentation
+        targets. Everything else (confounders, non-target invasives) is dropped.
+        """
         csv_path = os.path.normpath(csv_path)
         base = os.path.dirname(csv_path)
         df = pd.read_csv(csv_path)
+
         required = {"path", "class_id", "gsd_cutout", "mask_cov", "border_touch"}
         missing = required - set(df.columns)
         if missing:
             raise KeyError(f"cutouts.csv missing columns: {missing}")
 
+        target_ids = {i for i in self.classes if i > 0}
         df = df[df["class_id"].notna()].copy()
         df["class_id"] = df["class_id"].astype(int)
         df = df[
+            df["class_id"].isin(target_ids) &
             (df["mask_cov"] >= self.citizen_min_mask_cov) &
             (df["border_touch"] <= self.citizen_max_border_touch)
         ]
 
         for _, row in df.iterrows():
-            # paths in the CSV are relative to the CSV's parent's parent in practice;
-            # resolve against the data root that holds the cutouts dir
-
-            raw = os.path.normpath(str(row["path"]))
+            raw = os.path.normpath(os.path.join(base, str(row["path"])))
             if not os.path.isfile(raw):
                 raw = os.path.normpath(os.path.join(base, "..", "..", str(row["path"])))
-            
+            if not os.path.isfile(raw):
+                continue
             self.citizen_index.setdefault(int(row["class_id"]), []).append({
                 "path": raw,
-                "gsd": float(row["gsd_cutout"]) if pd.notna(row["gsd_cutout"]) else None,
+                "gsd":  float(row["gsd_cutout"]) if pd.notna(row["gsd_cutout"]) else None,
                 "w": int(row["w"]) if "w" in row and pd.notna(row["w"]) else None,
                 "h": int(row["h"]) if "h" in row and pd.notna(row["h"]) else None,
             })
-        for k in self.citizen_index:
-            n = len(self.citizen_index[k])
-            print(f"  citizen class {k}: {n} cutouts")
+
+        if not self.citizen_index:
+            print("  WARNING: no target-class cutouts found after filtering")
+        for k in sorted(self.citizen_index):
+            print(f"  citizen class {k}: {len(self.citizen_index[k])} cutouts")
 
     def _present_classes(self, mask):
         """Segmentation class IDs present in a mapped mask, neophytes only."""
