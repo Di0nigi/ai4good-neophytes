@@ -100,29 +100,23 @@ def extract_node_features(image, segments, extra_rasters):
 
 
 def make_node_labels(mask, segments, class_to_id, min_labeled_fraction=0.25):
-    """Assign each segment its majority class; unlabeled/unknown nodes get -1."""
     num_nodes = int(segments.max()) + 1
-    labels = np.full(num_nodes, -1, dtype=np.int64)
-
-    for node_id in range(num_nodes):
-        pixels = mask[segments == node_id]
-        mapped = np.array(
-            [class_to_id.get(int(v), -1) for v in pixels],
-            dtype=np.int64,
-        )
-        mapped = mapped[mapped >= 0]
-
-        if len(mapped) == 0:
-            continue
-
-        # Avoid training on segments with only a small labeled portion.
-        if len(mapped) / len(pixels) < min_labeled_fraction:
-            continue
-
-        counts = np.bincount(mapped, minlength=len(class_to_id))
-        labels[node_id] = int(counts.argmax())
-
-    return labels
+    num_classes = len(class_to_id)
+    lut = np.full(int(mask.max()) + 1, -1, dtype=np.int64)
+    for v, i in class_to_id.items():
+        lut[v] = i
+    mapped = lut[mask]
+    seg = segments.ravel()
+    ok = mapped.ravel() >= 0
+    counts = np.bincount(
+        seg[ok] * num_classes + mapped.ravel()[ok],
+        minlength=num_nodes * num_classes,
+    ).reshape(num_nodes, num_classes)
+    total = np.bincount(seg, minlength=num_nodes)
+    labeled = counts.sum(axis=1)
+    frac = labeled / np.maximum(total, 1)
+    labels = np.where(frac >= min_labeled_fraction, counts.argmax(axis=1), -1)
+    return labels.astype(np.int64)
 
 
 def make_adjacency(segments):
