@@ -105,6 +105,8 @@ def main(cfg: DictConfig) -> None:
             "felz_sigma": 0.4,
             "felz_min_size": 30,
         },
+        graph_cache_dir=cfg.data.get("graph_cache_dir", "./graph_cache"),
+        graph_cache_train=cfg.data.get("graph_cache_train", True),
     )
 
     dataModule.prepare_data()

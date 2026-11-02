@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +19,9 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
+
+# Bump whenever the graph/feature code changes, so stale disk caches are ignored.
+GRAPH_CACHE_VERSION = "2"
 
 
 def read_aligned_raster(path, reference, bands=None):
@@ -395,6 +399,7 @@ class NeophyteGraphDataset(NeophyteDataset):
         *args,
         graph_class_values=None,
         graph_kwargs=None,
+        graph_cache_dir=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -407,8 +412,58 @@ class NeophyteGraphDataset(NeophyteDataset):
             else list(graph_class_values)
         )
         self.graph_kwargs = graph_kwargs or {}
+        self.graph_cache_dir = Path(graph_cache_dir) if graph_cache_dir else None
+        if self.graph_cache_dir:
+            self.graph_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def _cache_path(self, idx):
+        # Key on the input files (path + mtime + size), the graph settings, the
+        # mask mapping, and the transforms, so any change rebuilds the graph.
+        files = [self.image_files[idx], self.mask_files[idx]]
+        if self.load_dsm:
+            files.append(self.dsm_files[idx])
+        if self.load_dtm:
+            files.append(self.dtm_files[idx])
+        file_info = []
+        for f in files:
+            st = os.stat(f)
+            file_info.append({"path": str(f), "mtime_ns": st.st_mtime_ns, "size": st.st_size})
+        key_data = {
+            "version": GRAPH_CACHE_VERSION,
+            "files": file_info,
+            "classes": self.graph_class_values,
+            "graph_kwargs": self.graph_kwargs,
+            "value_mapping": str(self.value_mapping),
+            "ignore_index": self.ignore_index,
+            "load_auxiliary": self.load_auxiliary,
+            "load_dsm": self.load_dsm,
+            "load_dtm": self.load_dtm,
+            "load_ndsm": self.load_ndsm,
+            "transform": repr(self.transform),
+            "dsm_transform": repr(self.dsm_transform),
+            "ndsm_transform": repr(self.ndsm_transform),
+        }
+        key = hashlib.sha1(json.dumps(key_data, sort_keys=True, default=str).encode()).hexdigest()
+        return self.graph_cache_dir / f"{key}.pt"
 
     def __getitem__(self, idx):
+        if self.graph_cache_dir:
+            cache_path = self._cache_path(idx)
+            if cache_path.exists():
+                return torch.load(cache_path, map_location="cpu", weights_only=False)
+
+        graph = self._build_graph(idx)
+
+        if self.graph_cache_dir:
+            # Atomic write; the pid suffix keeps concurrent workers from
+            # clobbering each other's temp file for the same key.
+            temp_path = cache_path.with_suffix(f".tmp{os.getpid()}")
+            torch.save(graph, temp_path)
+            temp_path.replace(cache_path)
+
+        return graph
+
+    def _build_graph(self, idx):
         sample = super().__getitem__(idx)
 
         image = _image_hwc(sample["image"])
@@ -467,12 +522,24 @@ class NeophyteGraphDataset(NeophyteDataset):
 
 
 class NeophyteGraphDataModule(NeophyteDataModule):
-    def __init__(self, *args, graph_class_values=None, graph_kwargs=None, **kwargs):
+    def __init__(
+        self,
+        *args,
+        graph_class_values=None,
+        graph_kwargs=None,
+        graph_cache_dir=None,
+        graph_cache_train=False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.graph_class_values = graph_class_values
         self.graph_kwargs = graph_kwargs or {}
+        self.graph_cache_dir = Path(graph_cache_dir) if graph_cache_dir else None
+        # Train transforms are random (crops/flips/jitter), so caching train
+        # graphs would freeze the augmentation. Only cache them on request.
+        self.graph_cache_train = graph_cache_train
 
-    def _make_graph_dataset(self, image_dirs, transform, training=False):
+    def _make_graph_dataset(self, image_dirs, transform, training=False, cache_dir=None):
         kwargs = dict(
             transform=transform,
             dsm_transform=self.dsm_transform,
@@ -488,6 +555,7 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             preload_workers=self.num_workers,
             graph_class_values=self.graph_class_values,
             graph_kwargs=self.graph_kwargs,
+            graph_cache_dir=cache_dir,
         )
 
         if training:
@@ -507,11 +575,16 @@ class NeophyteGraphDataModule(NeophyteDataModule):
 
     def setup(self, stage=None):
         if stage in ("fit", None):
+            train_cache = None
+            if self.graph_cache_dir and self.graph_cache_train:
+                train_cache = self.graph_cache_dir / "train"
             self.train_dataset = self._make_graph_dataset(
-                self.image_dirs.train, self.transform_train, training=True
+                self.image_dirs.train, self.transform_train, training=True,
+                cache_dir=train_cache,
             )
             self.val_dataset = self._make_graph_dataset(
-                self.image_dirs.val, self.transform_val
+                self.image_dirs.val, self.transform_val,
+                cache_dir=self.graph_cache_dir / "val" if self.graph_cache_dir else None,
             )
 
             if self.weighted_sampling:
@@ -523,7 +596,8 @@ class NeophyteGraphDataModule(NeophyteDataModule):
 
         if stage in ("test", None):
             self.test_dataset = self._make_graph_dataset(
-                self.image_dirs.test, self.transform_test
+                self.image_dirs.test, self.transform_test,
+                cache_dir=self.graph_cache_dir / "test" if self.graph_cache_dir else None,
             )
 
     def _get_loader_kwargs(self, shuffle=False, sampler=None, batch_size=None):

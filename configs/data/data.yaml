@@ -52,6 +52,9 @@ max_nodata_frac: null
 # # (a 1024px fold is tens of GB). Keep False while debugging.
 load_into_ram: False
 
+graph_cache_dir: './graph_cache'
+graph_cache_train: False
+
 # # Few-shot training subset: k images per class, chosen by few_shot_mode.
 # # null = use the full split.
 few_shot_k: null
