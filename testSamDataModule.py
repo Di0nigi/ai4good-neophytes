@@ -24,7 +24,7 @@ from samDataSet import SamNeophyteDataset
 from utils.transform_utils import get_transforms
 
 CUTOUTS_CSV = "../data/NeophytesCSCutouts/cutouts.csv"
-IMAGE_DIR = "../data/Neophytes/2024"  # adjust to a split that exists on your machine
+IMAGE_DIR = "../data/Neophytes/2025"  # adjust to a split that exists on your machine
 
 # minimal class dict matching configs/data/neophytes_names_colors.yaml
 CLASSES = {
