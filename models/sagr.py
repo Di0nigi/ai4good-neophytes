@@ -3,7 +3,12 @@ import torch
 import torch.nn.functional as F
 from torch.nn import BatchNorm1d, Linear, ReLU
 from torch_geometric.nn import GATConv, SAGEConv
-from torchmetrics.classification import MulticlassAccuracy
+from torchmetrics.classification import (
+    MulticlassAccuracy,
+    MulticlassAUROC,
+    MulticlassF1Score,
+    MulticlassJaccardIndex,
+)
 
 
 class HybridResNetBlock(torch.nn.Module):
@@ -67,14 +72,12 @@ class HybridResNet18GNN(pl.LightningModule):
                 torch.as_tensor(class_weights, dtype=torch.float32),
             )
 
-        self.train_acc = MulticlassAccuracy(
-            num_classes=num_classes,
-            ignore_index=-1,
-        )
-        self.val_acc = MulticlassAccuracy(
-            num_classes=num_classes,
-            ignore_index=-1,
-        )
+        for split in ["train", "val", "test"]:
+            setattr(self, f"{split}_acc", MulticlassAccuracy(num_classes=num_classes, average="macro", ignore_index=-1))
+            setattr(self, f"{split}_iou", MulticlassJaccardIndex(num_classes=num_classes, average="macro", ignore_index=-1))
+            setattr(self, f"{split}_f1", MulticlassF1Score(num_classes=num_classes, average="macro", ignore_index=-1))
+            setattr(self, f"{split}_auc", MulticlassAUROC(num_classes=num_classes, average="macro", ignore_index=-1, thresholds=5))
+            setattr(self, f"{split}_f1_per_class", MulticlassF1Score(num_classes=num_classes, average=None, ignore_index=-1))
 
     def forward(self, x, edge_index):
         x = self.initial_conv(x, edge_index)
@@ -113,29 +116,49 @@ class HybridResNet18GNN(pl.LightningModule):
             weight=self.class_weights,
         )
 
-        probs = logits[valid].softmax(dim=-1)
-        targets = y_valid
-        try:
-            batch_size = int(valid.sum())
-        except Exception:
-            batch_size = 0
+        preds = torch.argmax(logits, dim=1)
+        batch_size = int(valid.sum())
 
-        if stage == "train":
-            self.train_acc.update(probs, targets)
-            self.log("train/loss", loss, on_step=False, on_epoch=True, batch_size=batch_size)
-            self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, batch_size=batch_size)
-        else:
-            self.val_acc.update(probs, targets)
-            self.log("val/loss", loss, on_step=False, on_epoch=True, batch_size=batch_size)
-            self.log("val/acc", self.val_acc, on_step=False, on_epoch=True, batch_size=batch_size)
-
+        self.log(f"{stage}_loss", loss, on_step=stage == "train", on_epoch=True,
+                 prog_bar=True, batch_size=batch_size)
+        getattr(self, f"{stage}_acc").update(preds[valid].detach(), y_valid.detach())
+        getattr(self, f"{stage}_iou").update(preds[valid].detach(), y_valid.detach())
+        getattr(self, f"{stage}_f1").update(preds[valid].detach(), y_valid.detach())
+        getattr(self, f"{stage}_auc").update(logits[valid].detach(), y_valid.detach().long())
+        getattr(self, f"{stage}_f1_per_class").update(preds[valid].detach(), y_valid.detach())
         return loss
+
+    def _epoch_end(self, stage, prog_bar=True):
+        self.log_dict({
+            f"{stage}_acc": getattr(self, f"{stage}_acc").compute(),
+            f"{stage}_iou": getattr(self, f"{stage}_iou").compute(),
+            f"{stage}_f1": getattr(self, f"{stage}_f1").compute(),
+            f"{stage}_auc": getattr(self, f"{stage}_auc").compute(),
+        }, prog_bar=prog_bar)
+
+        for i, f1 in enumerate(getattr(self, f"{stage}_f1_per_class").compute()):
+            self.log(f"{stage}_f1_class_{i}", f1, prog_bar=False)
+
+        for metric in ("acc", "iou", "f1", "auc", "f1_per_class"):
+            getattr(self, f"{stage}_{metric}").reset()
 
     def training_step(self, batch, batch_idx):
         return self._shared_step(batch, "train")
 
     def validation_step(self, batch, batch_idx):
-        self._shared_step(batch, "val")
+        return self._shared_step(batch, "val")
+
+    def test_step(self, batch, batch_idx):
+        return self._shared_step(batch, "test")
+
+    def on_train_epoch_end(self):
+        self._epoch_end("train")
+
+    def on_validation_epoch_end(self):
+        self._epoch_end("val")
+
+    def on_test_epoch_end(self):
+        self._epoch_end("test")
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
