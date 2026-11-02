@@ -11,12 +11,14 @@ import rasterio
 import torch
 from skimage.measure import regionprops
 from skimage.segmentation import felzenszwalb
-from torch.utils.data import Dataset, WeightedRandomSampler, DataLoader as TorchDataLoader
-from torch_geometric.data import Data, Batch
+from torch.utils.data import DataLoader as TorchDataLoader
+from torch.utils.data import Dataset, WeightedRandomSampler
+from torch_geometric.data import Batch, Data
 from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
+
 
 def read_aligned_raster(path, reference, bands=None):
     """Read a raster and check that it matches the image tile's grid."""
@@ -102,10 +104,16 @@ def extract_node_features(image, segments, extra_rasters):
 def make_node_labels(mask, segments, class_to_id, min_labeled_fraction=0.25):
     num_nodes = int(segments.max()) + 1
     num_classes = len(class_to_id)
-    lut = np.full(int(mask.max()) + 1, -1, dtype=np.int64)
+    max_mask = int(mask.max()) if mask.size else -1
+    max_key = max(class_to_id) if class_to_id else -1
+    lut = np.full(max(max_mask, max_key) + 1, -1, dtype=np.int64)
     for v, i in class_to_id.items():
         lut[v] = i
-    mapped = lut[mask]
+
+    safe = np.clip(mask, 0, lut.shape[0] - 1)
+    mapped = lut[safe]
+    mapped[(mask < 0) | (mask >= lut.shape[0])] = -1   # ignore + unknown values
+
     seg = segments.ravel()
     ok = mapped.ravel() >= 0
     counts = np.bincount(
