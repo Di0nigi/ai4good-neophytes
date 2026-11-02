@@ -67,3 +67,10 @@ few_shot_bg_k: 1000  # additional background-only images (0 = none)
 val_few_shot_k: null
 val_few_shot_mode: 'all'
 val_few_shot_bg_k: 0
+
+citizen_cutouts_csv: '../data/NeophytesCSCutouts/cutouts.csv'
+citizen_k: 4                  # support examples per tile
+citizen_cache: True           # cache decoded cutouts in RAM (per worker)
+citizen_max_gsd_ratio: 3.0    # clamp cutout→tile GSD rescale factor
+citizen_min_mask_cov: 0.1     # drop sliver cutouts
+citizen_max_border_touch: 0.5 # drop clipped cutouts

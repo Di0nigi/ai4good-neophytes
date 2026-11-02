@@ -43,3 +43,4 @@ hydra:
     subdir: ${hydra.job.num}
   run:
     dir: ${log_path}/hydra/${now:%Y-%m-%d-%H-%M-%S}
+

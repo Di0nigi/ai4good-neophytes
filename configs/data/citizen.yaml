@@ -1,0 +1,4 @@
+# Enable the citizen-science support set on top of any split config.
+#   python train.py data=neophytes_split_cv1_train_512 data/citizen=citizen
+defaults:
+  - override /data: data   # no-op; placeholders, see note below

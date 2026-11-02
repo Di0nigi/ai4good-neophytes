@@ -35,7 +35,7 @@ def main(cfg: DictConfig) -> None:
     from pytorch_lightning import seed_everything
     from pytorch_lightning.loggers import CSVLogger, WandbLogger
 
-    from datasets.neophyte_datamodule import NeophyteDataModule
+    from samDataModule import SamNeophyteDataModule
     from models.semseg_plm import SegmentationModel
     from utils.callback_utils import get_callbacks
     from utils.transform_utils import get_transforms
@@ -59,7 +59,7 @@ def main(cfg: DictConfig) -> None:
     dsm_transforms = get_transforms(cfg.data.dsm_transforms, toTensor=False)
     ndsm_transforms = get_transforms(cfg.data.ndsm_transforms, toTensor=False)
 
-    dataModule = NeophyteDataModule(cfg.data.image_dir,
+    dataModule = SamNeophyteDataModule(cfg.data.image_dir,
                                     cfg.data.classes,
                                     train_transforms,
                                     val_transforms,
@@ -89,7 +89,13 @@ def main(cfg: DictConfig) -> None:
                                     batch_size_train=cfg.data.batch_size_train,
                                     batch_size_val=cfg.data.batch_size_val,
                                     batch_size_test=cfg.data.batch_size_test,
-                                    num_workers=cfg.data.num_workers)
+                                    num_workers=cfg.data.num_workers,
+                                    citizen_cutouts_csv=cfg.data.citizen_cutouts_csv,
+                                    citizen_k=cfg.data.citizen_k,
+                                    citizen_cache=cfg.data.citizen_cache,
+                                    citizen_max_gsd_ratio=cfg.data.citizen_max_gsd_ratio,
+                                    citizen_min_mask_cov=cfg.data.citizen_min_mask_cov,
+                                    citizen_max_border_touch=cfg.data.citizen_max_border_touch,)
 
     dataModule.prepare_data()
     dataModule.setup()

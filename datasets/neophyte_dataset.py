@@ -88,7 +88,7 @@ class NeophyteDataset(Dataset):
                 for root, _, files in sorted(os.walk(dsm_subdir)):
                     self.dsm_files.extend(sorted([os.path.join(root, f) for f in files if f.lower().endswith('.tif')]))
             if self.load_dtm:
-                dtm_subdir = os.path.join(image_dir, "dtm")
+                dtm_subdir = os.path.join(image_dir, "dtm")                         
                 for root, _, files in sorted(os.walk(dtm_subdir)):
                     self.dtm_files.extend(sorted([os.path.join(root, f) for f in files if f.lower().endswith('.tif')]))
         
