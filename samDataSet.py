@@ -290,9 +290,18 @@ class SamNeophyteDataset(Dataset):
 
     def _build_citizen_support(self, mask, tile_gsd_mm, out_size):
         """Sample k cutouts across the species present in this tile."""
+        
         present = self._present_classes(mask)
         if not present:
-            return None
+            H, W = out_size
+            k = self.citizen_k
+            return {
+                "citizen_examples":  torch.zeros(k, 3, H, W),
+                "citizen_labels":    torch.full((k,), -1, dtype=torch.long),
+                "enhanced_examples": torch.zeros(k, 2, 3, H, W),
+                "enhanced_labels":   torch.full((k,), -1, dtype=torch.long),
+                "enhanced_types":    [["none", "none"]] * k,
+            }
         k = self.citizen_k
 
         pools = {c: list(self.citizen_index[c]) for c in present}
@@ -817,8 +826,7 @@ class SamNeophyteDataset(Dataset):
             out_size = (image.shape[0], image.shape[1])
             mask_np = mask.cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
             support = self._build_citizen_support(mask_np, tile_gsd, out_size)
-            if support is not None:
-                sample.update(support)                
+            sample.update(support)              
         return sample
     
     
