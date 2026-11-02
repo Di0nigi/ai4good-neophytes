@@ -194,7 +194,7 @@ class SamNeophyteDataset(Dataset):
         if citizen_cutouts_csv:
             self._build_citizen_index(citizen_cutouts_csv)
     # mine
-        def _build_citizen_index(self, csv_path):
+    def _build_citizen_index(self, csv_path):
         """Index cutouts by segmentation class using cutouts.csv quality fields.
 
         cutouts.csv covers 53 species; only class_ids 1-6 are segmentation
