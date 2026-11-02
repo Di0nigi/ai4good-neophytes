@@ -121,7 +121,7 @@ def main(cfg: DictConfig) -> None:
     # %% model
     model = HybridResNet18GNN(
         in_channels=in_channels,
-        num_classes=6,
+        num_classes=cfg.model.num_classes,
         lr=cfg.model.lr
     )
 
