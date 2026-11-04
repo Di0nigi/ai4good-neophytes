@@ -5,21 +5,24 @@ from transformers import Sam3Model, Sam3Processor
 from torch import nn
 import torchvision.models as models
 
+import mobileclip
 
 
-class PromptGeneratorSam(nn):
+
+class PromptGeneratorSam(nn.Module):
     def __init__(self,dimensions_in,dimensions_out,attention_layer_num):
 
         self.dimsIn = dimensions_in
         self.dimsOut = dimensions_out
+        self.layerNum = attention_layer_num
 
         self.projector = nn.Linear()
 
         
         
-        self.att =  nn.MultiheadAttention(),
-        self.norm =nn.LayerNorm(),
-        self.gelu = nn.GELU(),
+        self.att =  nn.ModuleList([nn.MultiheadAttention() for i in range(self.layerNum)])
+        self.norm =nn.ModuleList([nn.LayerNorm() for i in range(self.layerNum)]),
+        self.gelu = nn.ModuleList([nn.GELU() for i in range(self.layerNum)]),
         
 
         self.output = nn.Linear()
@@ -28,13 +31,25 @@ class PromptGeneratorSam(nn):
         return
 
     def forward(self,X):
-        
 
 
 
+        projected = self.projector(X)
 
-        return
-    
+        outTensor = projected
+
+        for i in range(self.layerNum):
+
+            out,_ = self.att[i](outTensor,outTensor,outTensor)
+
+            norm = self.norm[i](out) + outTensor
+
+            outTensor = self.gelu[i](norm)
+
+        output =self.output(outTensor)
+
+        return output
+  
 
 class Sam3EnsembleModel(pl.LightningModule):
     
