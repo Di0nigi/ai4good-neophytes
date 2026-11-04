@@ -2,6 +2,8 @@
 
 from transformers import Sam3Model, Sam3Processor
 from torch import nn
+import torchvision.models as models
+
 
 
 
@@ -11,6 +13,7 @@ class SamEnsemble: # Regular Sam 3 with Neophyte classifier
     def __init___(self):
         self.samModel = Sam3Model.from_pretrained()
         self.samProcessor = Sam3Processor.from_pretrained()
+        self.classifier = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         
         return
     
