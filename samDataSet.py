@@ -170,13 +170,39 @@ class SamNeophyteDataset(Dataset):
 
         # # set dsm noDataValue and normalization mean
         self.dsm_noDataValue = -32767
-        if dsm_transform:
-            self.dsm_mean, _ = get_normalize_params(dsm_transform)
-            mean, std = get_normalize_params(self.transform) if self.transform else (None, None)
-            self._dn_mean = torch.tensor(mean).view(3, 1, 1) if mean is not None else None
-            self._dn_std  = torch.tensor(std).view(3, 1, 1)  if std  is not None else None
-            self.enhance_query = enhance_query
-            
+        #if dsm_transform:
+        #    self.dsm_mean, _ = get_normalize_params(dsm_transform)
+        #    mean, std = get_normalize_params(self.transform) if self.transform else (None, None)
+        #    self._dn_mean = torch.tensor(mean).view(3, 1, 1) if mean is not None else None
+        #    self._dn_std  = torch.tensor(std).view(3, 1, 1)  if std  is not None else None
+        #    self.enhance_query = enhance_query
+        # # Still trytng it out
+        # image-normalization params for denormalizing the drone tile before enhancement.
+        # self.transform may be a Compose or a SplitTransform; read Normalize directly
+        # from whichever sub-pipeline holds it, without touching get_normalize_params.
+        self._dn_mean, self._dn_std = None, None
+        if self.transform is not None:
+            from albumentations import Compose as _ACompose
+            candidates = [self.transform]
+            for attr in ("spatial", "pixel"):
+                sub = getattr(self.transform, attr, None)
+                if sub is not None:
+                    candidates.append(sub)
+            for c in candidates:
+                norm = None
+                if isinstance(c, Normalize):
+                    norm = c
+                elif isinstance(c, _ACompose):
+                    for t in c.transforms:
+                        if isinstance(t, Normalize):
+                            norm = t
+                            break
+                if norm is not None:
+                    self._dn_mean = torch.tensor(norm.mean).view(3, 1, 1)
+                    self._dn_std  = torch.tensor(norm.std).view(3, 1, 1)
+                    break
+
+        
         # # preload into RAM
         self.images_ram = None
         self.masks_ram = None
