@@ -108,7 +108,15 @@ def main(cfg: DictConfig) -> None:
     print('Image batch shape: ', batch['image'].shape, '\nMask batch shape:  ', batch['mask'].shape)
 
     # %% model
-    model = SegmentationModel(cfg.model.model_name,
+    model_class = SegmentationModel
+    model_kwargs = {}
+    if cfg.model.model_name == 'Sam3Ensemble':
+        from models.sam3_plm import Sam3EnsembleModel
+        model_class = Sam3EnsembleModel
+        model_kwargs = {key: cfg.model[key] for key in (
+            'sam_checkpoint', 'prompt_checkpoint', 'classifier_name',
+            'freeze_sam', 'freeze_prompt_generator')}
+    model = model_class(cfg.model.model_name,
                               cfg.model.encoder_name,
                               cfg.model.img_size,
                               cfg.model.num_classes,
@@ -120,7 +128,8 @@ def main(cfg: DictConfig) -> None:
                               loss=cfg.model.loss,
                               weight=cfg.model.weight,
                               patch_2_img_size=cfg.model.patch_2_img_size,
-                              fusion_mode=cfg.model.fusion_mode)
+                              fusion_mode=cfg.model.fusion_mode,
+                              **model_kwargs)
 
     # %% training
     callbacks = get_callbacks(cfg.model.callbacks)
@@ -139,7 +148,7 @@ def main(cfg: DictConfig) -> None:
     last_ckpt_path = os.path.join(cfg.log_path, 'checkpoints/last.ckpt')
     if os.path.exists(last_ckpt_path):
         print(f'Loading weights from: {last_ckpt_path}')
-        model = SegmentationModel.load_from_checkpoint(last_ckpt_path, weights_only=False).to(device)
+        model = model_class.load_from_checkpoint(last_ckpt_path, weights_only=False).to(device)
 
     start_time = time.time()
     trainer.fit(model, dataModule)
@@ -149,7 +158,7 @@ def main(cfg: DictConfig) -> None:
     # # (the detailed evaluation lives in test.py)
     ckpt_path = trainer.checkpoint_callback.best_model_path
     print('ckpt_path: ', ckpt_path)
-    model = SegmentationModel.load_from_checkpoint(ckpt_path, weights_only=False).to(device)
+    model = model_class.load_from_checkpoint(ckpt_path, weights_only=False).to(device)
     model.eval()
     trainer.test(model=model, dataloaders=dataModule)
 

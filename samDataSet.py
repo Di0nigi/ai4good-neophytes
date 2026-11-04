@@ -286,7 +286,7 @@ class SamNeophyteDataset(Dataset):
         img = Image.open(path).convert("RGB")
         # scale cutout pixels so its GSD matches the tile's GSD
         cgsd = entry["gsd"] or DEFAULT_TILE_GSD_MM
-        scale = tile_gsd_mm / cgsd
+        scale = cgsd / tile_gsd_mm
         if scale > self.citizen_max_gsd_ratio:
             scale = self.citizen_max_gsd_ratio
         if scale < 1.0 / self.citizen_max_gsd_ratio:
@@ -846,7 +846,7 @@ class SamNeophyteDataset(Dataset):
                 sample['dtm'] = dtm.unsqueeze(0)
 
         if self.citizen_index:
-            out_size = (image.shape[0], image.shape[1])
+            out_size = image.shape[-2:]
             mask_np = mask.cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
             support = self._build_citizen_support(mask_np, tile_gsd, out_size)
             sample.update(support)
