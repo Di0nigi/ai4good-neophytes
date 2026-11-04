@@ -44,7 +44,10 @@ def _tile_gsd_mm(src):
 
 
 class SamNeophyteDataset(Dataset):
-    def __init__(self, image_dirs, classes, transform=None, dsm_transform=None, ndsm_transform=None, dataset_stats=None, geo=False, weighted_sampling=None, cap_quantile=None, lift_quantile=None, bg_fraction=None, min_strat_images=10, value_mapping=None, ignore_index=-1, load_auxiliary=False, load_dsm=False, load_dtm=False, load_ndsm=False, few_shot_k=None, few_shot_mode='max_px_site_pheno', few_shot_bg_k=100, max_nodata_frac=None, load_into_ram=False, preload_workers=None, return_dsm_dtm=False, citizen_cutouts_csv=None, citizen_k=4, citizen_cache=True, citizen_max_gsd_ratio=3.0, citizen_min_mask_cov=0.1, citizen_max_border_touch=0.5):
+    def __init__(self, image_dirs, classes, transform=None, dsm_transform=None, ndsm_transform=None, dataset_stats=None, geo=False, weighted_sampling=None, cap_quantile=None, lift_quantile=None, bg_fraction=None, min_strat_images=10, value_mapping=None, ignore_index=-1, load_auxiliary=False, load_dsm=False, load_dtm=False, load_ndsm=False, few_shot_k=None, few_shot_mode='max_px_site_pheno', few_shot_bg_k=100, max_nodata_frac=None, load_into_ram=False, preload_workers=None, return_dsm_dtm=False, citizen_cutouts_csv=None, citizen_k=4, citizen_cache=True, citizen_max_gsd_ratio=3.0, citizen_min_mask_cov=0.1, citizen_max_border_touch=0.5,enhance_query=False):
+
+        self.enhance_query = enhance_query
+        
         self.image_dirs = image_dirs if isinstance(image_dirs, ListConfig) or isinstance(image_dirs, list) else [image_dirs]
         self.classes = classes
         self.num_classes = len(classes)
@@ -169,6 +172,10 @@ class SamNeophyteDataset(Dataset):
         self.dsm_noDataValue = -32767
         if dsm_transform:
             self.dsm_mean, _ = get_normalize_params(dsm_transform)
+            mean, std = get_normalize_params(self.transform) if self.transform else (None, None)
+            self._dn_mean = torch.tensor(mean).view(3, 1, 1) if mean is not None else None
+            self._dn_std  = torch.tensor(std).view(3, 1, 1)  if std  is not None else None
+            self.enhance_query = enhance_query
             
         # # preload into RAM
         self.images_ram = None
@@ -296,11 +303,8 @@ class SamNeophyteDataset(Dataset):
             H, W = out_size
             k = self.citizen_k
             return {
-                "citizen_examples":  torch.zeros(k, 3, H, W),
-                "citizen_labels":    torch.full((k,), -1, dtype=torch.long),
-                "enhanced_examples": torch.zeros(k, 2, 3, H, W),
-                "enhanced_labels":   torch.full((k,), -1, dtype=torch.long),
-                "enhanced_types":    [["none", "none"]] * k,
+                "citizen_examples": torch.zeros(k, 3, H, W),
+                "citizen_labels":   torch.full((k,), -1, dtype=torch.long),
             }
         k = self.citizen_k
 
@@ -319,23 +323,16 @@ class SamNeophyteDataset(Dataset):
             c = present[len(chosen) % len(present)]
             chosen.append((c, np.random.choice(self.citizen_index[c])))
 
-        base, enh, labels, types = [], [], [], []
+        base, labels = [], []
         for class_id, entry in chosen:
             rgb = self._load_cutout(entry, tile_gsd_mm, out_size)
-            clahe_rgb, edge_rgb = self._enhance_cutout(rgb)
             base.append(rgb)
-            enh.append(np.stack([clahe_rgb, edge_rgb], axis=0))
             labels.append(class_id)
-            types.append(["clahe", "edges"])
 
         base_t = torch.from_numpy(np.stack(base)).permute(0, 3, 1, 2).float() / 255.0
-        enh_t = torch.from_numpy(np.stack(enh)).permute(0, 1, 4, 2, 3).float() / 255.0
         return {
-            "citizen_examples": base_t,           # [k, 3, H, W]
-            "citizen_labels": torch.tensor(labels, dtype=torch.long),
-            "enhanced_examples": enh_t,           # [k, 2, 3, H, W]
-            "enhanced_labels": torch.tensor(labels, dtype=torch.long),
-            "enhanced_types": types,
+            "citizen_examples": base_t,                        # [k, 3, H, W]
+            "citizen_labels":   torch.tensor(labels, dtype=torch.long),
         }
     # mine end
     def _nodata_frac(self):
@@ -826,7 +823,17 @@ class SamNeophyteDataset(Dataset):
             out_size = (image.shape[0], image.shape[1])
             mask_np = mask.cpu().numpy() if torch.is_tensor(mask) else np.asarray(mask)
             support = self._build_citizen_support(mask_np, tile_gsd, out_size)
-            sample.update(support)              
+            sample.update(support)
+
+        # enhanced views of the drone tile (query side)
+
+        if self.citizen_index and self.enhance_query:
+            img = (image.cpu() * self._dn_std + self._dn_mean).clamp(0, 1) if self._dn_mean is not None else image.cpu()
+            img = (img.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            c, e = self._enhance_cutout(img)
+            sample["image_clahe"] = torch.from_numpy(c).permute(2, 0, 1).float() / 255.0
+            sample["image_edges"] = torch.from_numpy(e).permute(2, 0, 1).float() / 255.0              
+        
         return sample
     
     
