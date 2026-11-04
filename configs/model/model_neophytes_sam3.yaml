@@ -1,12 +1,15 @@
-# Interface scaffold only; model methods must be implemented before training.
+# SAM 3 with continuous dictionary-conditioned prompts and a region classifier.
 # python train.py model=model_neophytes_sam3
 defaults:
   - model
 
 model_name: Sam3Ensemble
 encoder_name: sam3
+in_channels:
+  image: 3
+  ndsm: 1  # train.py enables DSM/DTM loading and aligned nDSM transforms.
 sam_checkpoint: facebook/sam3
 prompt_checkpoint: HuggingFaceTB/SmolVLM-500M-Instruct
 classifier_name: resnet18
 freeze_sam: True
-freeze_prompt_generator: True
+freeze_prompt_generator: False
