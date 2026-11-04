@@ -1,41 +1,57 @@
-"""SAM 3 + automatic text prompts + region classifier (interfaces only).
 
-Selected through ``model=model_neophytes_sam3`` in train.py. No pretrained
-weights are downloaded here. Model construction and all learning logic remain
-to be implemented; this scaffold is intentionally not trainable yet.
-"""
 
 import pytorch_lightning as pl
+from transformers import Sam3Model, Sam3Processor
+from torch import nn
+import torchvision.models as models
 
+
+
+class PromptGeneratorSam(nn):
+    def __init__(self,dimensions_in,dimensions_out,attention_layer_num):
+
+        self.dimsIn = dimensions_in
+        self.dimsOut = dimensions_out
+
+        self.projector = nn.Linear()
+
+        
+        
+        self.att =  nn.MultiheadAttention(),
+        self.norm =nn.LayerNorm(),
+        self.gelu = nn.GELU(),
+        
+
+        self.output = nn.Linear()
+
+
+        return
+
+    def forward(self,X):
+        
+
+
+
+
+        return
+    
 
 class Sam3EnsembleModel(pl.LightningModule):
-    """Use the same constructor and inference contract as SegmentationModel.
-
-    Planned components:
-      prompt_generator: image -> short concept phrases (no query-mask access).
-      sam_model / sam_processor: RGB + phrases -> instance proposals.
-      classifier: masked RGB crops -> species/background logits.
-
-    Dataset RGB is normalized CHW. Restore RGB using the data normalization
-    parameters before passing images to a pretrained processor; avoid applying
-    normalization twice. SAM preprocessing must retain the coordinate mapping
-    back to the original batch image grid.
-    """
+    
 
     def __init__(self, model, encoder_name, img_size, num_classes, learning_rate,
                  in_channels=None, ignore_index=-1, optimizer='AdamW', lr_scheduler=None,
-                 loss='CE', weight=None, patch_2_img_size=False, fusion_mode='concat',
-                 sam_checkpoint='facebook/sam3',
-                 prompt_checkpoint='HuggingFaceTB/SmolVLM-500M-Instruct',
-                 classifier_name='resnet18', freeze_sam=True, freeze_prompt_generator=True):
+                 loss='CE', weight=None, patch_2_img_size=False):
         super().__init__()
         self.save_hyperparameters()
         self.in_channels = in_channels
         self.num_classes = num_classes
-        self.prompt_generator = None
-        self.sam_model = None
-        self.sam_processor = None
-        self.classifier = None
+        self.prompt_generator = PromptGeneratorSam()
+        self.sam_model = Sam3Model()
+        self.sam_processor = Sam3Processor()
+        self.classifier = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+
+        return 
 
     def setup(self, stage=None):
         """TODO: build components and apply the configured freezing policy."""
