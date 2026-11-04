@@ -5,38 +5,58 @@ from transformers import Sam3Model, Sam3Processor
 from torch import nn
 import torchvision.models as models
 
-import mobileclip
-
+import open_clip
+import torch
 
 
 class PromptGeneratorSam(nn.Module):
-    def __init__(self,dimensions_in,dimensions_out,attention_layer_num):
+    def __init__(self,dimensions_in = 1536 ,dimensions_out =0,emb_dims= 512,attention_layer_num=8):
 
         self.dimsIn = dimensions_in
         self.dimsOut = dimensions_out
+        self.embDims = emb_dims
         self.layerNum = attention_layer_num
 
-        self.projector = nn.Linear()
 
+        self.clipModel, _, self.clipPreprocess = open_clip.create_model_and_transforms('MobileCLIP2-S0', pretrained='dfndr2b')
         
+        self.tokenizer = open_clip.get_tokenizer('MobileCLIP2-S0')
+
+        self.projector = nn.Linear(self.dimsIn,self.embDims)
         
-        self.att =  nn.ModuleList([nn.MultiheadAttention() for i in range(self.layerNum)])
-        self.norm =nn.ModuleList([nn.LayerNorm() for i in range(self.layerNum)]),
-        self.gelu = nn.ModuleList([nn.GELU() for i in range(self.layerNum)]),
+        self.att =  nn.ModuleList([nn.MultiheadAttention(self.embDims,num_heads=8,batch_first=True) for _ in range(self.layerNum)])
+        self.norm =nn.ModuleList([nn.LayerNorm(self.embDims) for _ in range(self.layerNum)])
+        self.gelu = nn.ModuleList([nn.GELU() for _ in range(self.layerNum)])
         
 
-        self.output = nn.Linear()
-
+        self.output = nn.Linear(self.embDims,self.dimsOut)
 
         return
 
     def forward(self,X):
 
+        heightMap,enhancedIm,textPrompt = X
 
+        imgEmb = self.clipModel.encode_image(enhancedIm)
+        imgEmb = imgEmb / imgEmb.norm(dim=-1, keepdim=True)
 
-        projected = self.projector(X)
+        
+        hEmb = self.clipModel.encode_image(heightMap)
+        hEmb = hEmb / hEmb.norm(dim=-1, keepdim=True)
 
-        outTensor = projected
+        
+        tokens = self.tokenizer(textPrompt)             
+        #if tokens.device != enhancedIm.device:
+        #    tokens = tokens.to(enhancedIm.device)
+        tEmb = self.clipModel.encode_text(tokens)
+        tEmb = tEmb / tEmb.norm(dim=-1, keepdim=True)
+
+    
+        embedding = torch.cat([hEmb, imgEmb, tEmb], dim=-1)
+
+        projected = self.projector(embedding)
+
+        outTensor = projected.unsqueeze(1)
 
         for i in range(self.layerNum):
 
@@ -46,7 +66,7 @@ class PromptGeneratorSam(nn.Module):
 
             outTensor = self.gelu[i](norm)
 
-        output =self.output(outTensor)
+        output =self.output(outTensor.squeeze(1))
 
         return output
   
