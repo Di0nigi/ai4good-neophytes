@@ -128,16 +128,87 @@ class Sam3EnsembleModel(pl.LightningModule):
     def train(self, mode=True):
         """Keep frozen components in eval mode without disabling gradient flow."""
         super().train(mode)
-        if self.hparams.freeze_sam:
-            self.sam_model.eval()
-        if self.hparams.freeze_prompt_generator:
-            self.prompt_generator.eval()
+        
         return self
 
     def prepare_inputs(self, batch, stage=None):
-        
+        images = batch["image"]                 
+        masks = batch["mask"].long()   
 
-        return 
+        texts, labels = [], []
+        for m in masks:
+            present = torch.unique(m).tolist()
+            
+            cand = [int(c) for c in present if int(c) > 0 and int(c) in speciesDict]
+            if cand:
+                lab = cand[0]
+                texts.append(speciesDict[lab])
+                labels.append(lab)
+            else:
+                texts.append("background")
+                labels.append(0)
+        
+        dup_imgs, dup_masks, dup_texts, dup_labels = [], [], [], []
+        for i, m in enumerate(masks):
+            present = torch.unique(m).tolist()
+            cand = [int(c) for c in present if int(c) > 0 and int(c) in speciesDict]
+            if len(cand) <= 1:
+                continue
+            # first label already used in the original tile; add the rest
+            for lab in cand[1:]:
+                dup_imgs.append(images[i])
+                # keep only that label in the duplicate's mask (rest -> background)
+                new_mask = m.clone()
+                new_mask[new_mask != lab] = 0
+                dup_masks.append(new_mask)
+                dup_texts.append(speciesDict[lab])
+                dup_labels.append(lab)
+
+        if dup_imgs:
+            images = torch.cat([images, torch.stack(dup_imgs)], dim=0)
+            masks  = torch.cat([masks,  torch.stack(dup_masks)], dim=0)
+            texts  = texts + dup_texts
+            labels = labels + dup_labels
+
+        batch["image"] = images
+        batch["mask"]  = masks
+        batch["prompt_text"] = texts
+        batch["prompt_label"] = labels
+
+        enhancedIm = images
+        #if "image_clahe" in batch:
+        #    enhancedIm = torch.cat([images, batch["image_clahe"]], dim=1)
+        if "image_edges" in batch:
+            enhancedIm = torch.cat([images, batch["image_edges"]], dim=1)
+
+        if "ndsm" in batch:
+            heightMap = batch["ndsm"].float()
+            if heightMap.shape[1] == 1:
+                heightMap = heightMap.repeat(1, 3, 1, 1)
+        else:
+            heightMap = torch.zeros_like(images)
+
+        textPrompt = texts
+
+        promptInputs = (enhancedIm, heightMap, textPrompt)
+        boxes = []
+        for m in masks:
+            ys, xs = torch.where(m > 0)
+            if ys.numel() == 0:
+                # no positive pixels -> full-image box
+                h, w = m.shape
+                boxes.append([0.0, 0.0, float(w), float(h)])
+            else:
+                boxes.append([xs.min().item(), ys.min().item(),
+                            xs.max().item(), ys.max().item()])
+        batch["boxes"] = torch.tensor(boxes, dtype=torch.float32, device=images.device)
+
+        samInputs = {
+            "pixel_values": images,
+            "input_boxes": batch["boxes"],
+        }
+        
+        return samInputs, promptInputs
 
     def segment_instances(self, sam_outputs, image_info):
         """Select candidate masks on the original grid for ResNet classification.
