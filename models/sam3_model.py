@@ -316,6 +316,7 @@ class Sam3EnsembleModel(nn.Module):
                 # Binary target: prompted species = 1,
                 # everything else = 0
                 target_mask = (m == lab).long()
+                target_mask[m == self.ignore_index] = self.ignore_index
 
                 dup_imgs.append(images[i])
                 dup_heightmaps.append(height_maps[i])
@@ -329,7 +330,9 @@ class Sam3EnsembleModel(nn.Module):
             dup_imgs.append(images[i])
             dup_heightmaps.append(height_maps[i])
 
-            dup_masks.append(torch.zeros_like(m))
+            background_mask = torch.zeros_like(m)
+            background_mask[m == self.ignore_index] = self.ignore_index
+            dup_masks.append(background_mask)
 
             dup_texts.append("background")
             dup_labels.append(0)
