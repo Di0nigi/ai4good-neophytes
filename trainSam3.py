@@ -251,6 +251,7 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     best = float('inf')
     for epoch in range(1, args.epochs + 1):
+        print("got here")
         train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
                                height_max_m=args.height_max_m)
         val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
