@@ -18,7 +18,7 @@ from SAM.samPromptsDescriptions import speciesDict
 
 
 class PromptGeneratorSam(nn.Module):
-    def __init__(self,dimensions_in = 1536 ,dimensions_out =0,emb_dims= 512,attention_layer_num=8):
+    def __init__(self,dimensions_in = 1536 ,dimensions_out = 0,emb_dims= 512,attention_layer_num=8):
 
         super().__init__()
         self.dimsIn = dimensions_in
@@ -135,37 +135,9 @@ class Sam3EnsembleModel(pl.LightningModule):
         return self
 
     def prepare_inputs(self, batch, stage=None):
-        """Return per-tile (enhanced RGB, height, texts), and (RGB, labels).
+        
 
-        Assumes the current ImageNet RGB and nDSM mean=1.43/std=3.10
-        normalization. Training selects labelled species; evaluation uses all.
-        """
-        image, masks = batch['image'], batch['mask']
-        mean = image.new_tensor([0.485, 0.456, 0.406])[None, :, None, None]
-        std = image.new_tensor([0.229, 0.224, 0.225])[None, :, None, None]
-        rgb = (image * std + mean).clamp(0, 1)
-        height = ((batch['ndsm'] * 3.10 + 1.43).clamp(0, 10) / 10).repeat(1, 3, 1, 1)
-        preprocess = self.prompt_generator.clipPreprocess
-        keys = list(speciesDict)
-        generator_inputs = []
-        training = stage == 'train' if stage is not None else self.training
-
-        for colour, elevation, mask in zip(rgb, height, masks):
-            ids = [int(c) for c in mask.unique() if c > 0] if training else []
-            ids = ids or list(range(1, len(keys) + 1))
-            values = [speciesDict[keys[c - 1]] for c in ids]
-            texts = [v if isinstance(v, str) else v['description'] for v in values]
-            colour = Image.fromarray((colour.detach().cpu().permute(1, 2, 0) * 255).byte().numpy())
-            elevation = Image.fromarray((elevation.detach().cpu().permute(1, 2, 0) * 255).byte().numpy())
-            enhanced = preprocess(ImageOps.equalize(colour)).to(image.device)
-            heightmap = preprocess(elevation).to(image.device)
-            generator_inputs.append((
-                enhanced.unsqueeze(0).repeat(len(texts), 1, 1, 1),
-                heightmap.unsqueeze(0).repeat(len(texts), 1, 1, 1),
-                texts,
-            ))
-
-        return generator_inputs, (rgb, masks)
+        return 
 
     def segment_instances(self, sam_outputs, image_info):
         """Select candidate masks on the original grid for ResNet classification.
@@ -175,20 +147,8 @@ class Sam3EnsembleModel(pl.LightningModule):
         Query IDs are unnecessary here because classification targets are
         assigned from the restored masks, independently of the foreground loss.
         """
-        results = self.sam_processor.post_process_instance_segmentation(
-            sam_outputs, threshold=self.hparams.proposal_threshold,
-            mask_threshold=0.5, target_sizes=image_info)
-        instances = []
-        for result, size in zip(results, image_info):
-            masks, scores = result['masks'].bool(), result['scores']
-            if masks.numel() == 0:
-                masks = torch.zeros((0, *size), device=scores.device, dtype=torch.bool)
-            elif masks.shape[-2:] != size:
-                masks = F.interpolate(masks[:,None].float(), size=size,
-                                      mode='nearest')[:,0].bool()
-            keep = scores.argsort(descending=True)[:self.hparams.max_proposals]
-            instances.append({'masks': masks[keep], 'scores': scores[keep]})
-        return instances
+        
+        return
 
     def classify_instances(self, images, instances):
         """Build masked RGB crops, apply ResNet preprocessing and classify them.
@@ -196,64 +156,19 @@ class Sam3EnsembleModel(pl.LightningModule):
         Return logits per image in proposal order, including [0,K] for no masks.
         A fixed-size masked canvas retains that order even for an empty mask.
         """
-        crops = []
-        for image, instance in zip(images, instances):
-            for mask in instance['masks']:
-                ys, xs = mask.nonzero(as_tuple=True)
-                if len(xs):
-                    y0, y1 = int(ys.min()), int(ys.max()) + 1
-                    x0, x1 = int(xs.min()), int(xs.max()) + 1
-                    crop = image[:,y0:y1,x0:x1] * mask[y0:y1,x0:x1]
-                else:
-                    crop = image.new_zeros((3,224,224))
-                crops.append(self.classifier_preprocess(crop))
-        counts = [len(item['masks']) for item in instances]
-        if not crops:
-            return [images.new_empty((0,self.num_classes)) for _ in instances]
-        return list(self.classifier(torch.stack(crops)).split(counts))
-
+        
+        return
     def merge_instances(self, instances, class_logits, output_size):
         """Produce semantic scores [B,K,H,W]; uncovered pixels are background.
 
         Use the strongest confidence-weighted mask per species, resolve overlaps
         by highest score and reject proposals classified as background.
         """
-        output = []
-        for instance, logits in zip(instances, class_logits):
-            scores = logits.new_zeros((self.num_classes,*output_size))
-            scores[0] = 0.5
-            probabilities = logits.softmax(-1)
-            for mask, confidence, probability in zip(instance['masks'], instance['scores'], probabilities):
-                if probability.argmax() == 0:
-                    continue
-                values = probability[:,None,None] * confidence * mask
-                scores[1:] = torch.maximum(scores[1:], values[1:])
-            output.append(scores)
-        return torch.stack(output)
+        return 
 
     def forward(self, images, generator_inputs):
         """Run variable-length per-tile prompt tuples through SAM and ResNet."""
-        tokens = [self.prompt_generator(inputs) for inputs in generator_inputs]
-        lengths = torch.tensor([len(t) for t in tokens], device=images.device)
-        tokens = nn.utils.rnn.pad_sequence(tokens, batch_first=True)
-        valid = torch.arange(tokens.shape[1], device=images.device)[None] < lengths[:, None]
-        reference = next(self.sam_model.parameters())
-        tokens = tokens.to(device=reference.device, dtype=reference.dtype)
-        rgb_pil = [Image.fromarray((im.detach().cpu().permute(1, 2, 0) * 255).byte().numpy())
-                   for im in images]
-        pixels = self.sam_processor(images=rgb_pil, return_tensors='pt')['pixel_values'].to(images.device)
-        sam_outputs = self.sam_model(
-            pixel_values=pixels,
-            text_embeds=BaseModelOutputWithPooling(pooler_output=tokens),
-            attention_mask=valid, return_dict=True)
-        with torch.no_grad():
-            instances = self.segment_instances(sam_outputs, [tuple(images.shape[-2:])] * len(images))
-        class_logits = self.classify_instances(images, instances)
-        with torch.no_grad():
-            scores = self.merge_instances(instances, class_logits, images.shape[-2:])
-        return {'sam_outputs': sam_outputs, 'instances': instances,
-                'class_logits': class_logits, 'scores': scores,
-                'predictions': scores.argmax(1)}
+        return 
 
     def _step(self, batch, stage):
         """Train generator with foreground loss and ResNet with region labels.
@@ -262,31 +177,8 @@ class Sam3EnsembleModel(pl.LightningModule):
         each mask. Fully ignored/empty regions do not train the classifier.
         This is semantic-region supervision, not individual-plant matching.
         """
-        generator_inputs, (images, targets) = self.prepare_inputs(batch, stage)
-        output = self(images, generator_inputs)
-        raw = output['sam_outputs']
-        foreground = foreground_seg_loss(raw.pred_masks, raw.pred_logits, targets,
-                                          ignore_index=self.hparams.ignore_index)
-        logits, labels = [], []
-        for target, instance, region_logits in zip(targets, output['instances'], output['class_logits']):
-            for mask, logit in zip(instance['masks'], region_logits):
-                values = target[mask & (target != self.hparams.ignore_index)].long()
-                if values.numel():
-                    labels.append(torch.bincount(values, minlength=self.num_classes).argmax())
-                    logits.append(logit)
-        cls_loss = (F.cross_entropy(torch.stack(logits), torch.stack(labels)) if logits
-                    else next(self.classifier.parameters()).sum() * 0)
-        loss = foreground['loss'] + cls_loss
-        for name, value in {'loss': loss, 'foreground_loss': foreground['loss'],
-                            'bce': foreground['bce'], 'dice': foreground['dice'],
-                            'classification_loss': cls_loss}.items():
-            self.log(f'{stage}_{name}', value, on_step=stage == 'train',
-                     on_epoch=True, batch_size=targets.shape[0], prog_bar=name == 'loss')
-        valid = targets != self.hparams.ignore_index
-        encoded = self.num_classes * targets[valid].long() + output['predictions'][valid]
-        getattr(self, f'{stage}_confusion').add_(
-            torch.bincount(encoded, minlength=self.num_classes**2).reshape(self.num_classes,self.num_classes))
-        return loss
+        
+        return 
 
     def training_step(self, batch, batch_idx):
         """Return the loss Lightning differentiates during training."""
