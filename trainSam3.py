@@ -79,6 +79,14 @@ def dice_cce_loss(logits, targets, ignore_index=IGNORE_INDEX):
     return cce + 1 - (2 * intersection + 1e-6) / (denominator + 1e-6)
 
 
+def tile_stem(path):
+    """Match image/label tile IDs across known preprocessing suffixes."""
+    stem = Path(path).stem
+    for marker in ('_json_to_mask_', '_registered_resampled_'):
+        stem = stem.replace(marker, '_')
+    return stem
+
+
 def build_dataset(dirs, size, training):
     from samDataSet import SamNeophyteDataset
     from utils.transform_utils import get_transforms
@@ -96,9 +104,7 @@ def build_dataset(dirs, size, training):
         raise ValueError(f'No image/mask pairs found in {dirs}')
     # The dataset sorts images and masks separately. Reject mismatched pairing.
     for image, mask in zip(dataset.image_files, dataset.mask_files):
-        # Prepared labels insert this marker between the site and tile indices.
-        mask_stem = Path(mask).stem.replace('_json_to_mask_', '_')
-        if Path(image).stem != mask_stem:
+        if tile_stem(image) != tile_stem(mask):
             raise ValueError(f'Image/mask filenames do not match: {image}, {mask}')
     return dataset
 
