@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from samDataSet import SamNeophyteDataset
-from sam3_model import Sam3EnsembleModel
+from models.sam3_model import Sam3EnsembleModel
 
 
 # --------------------------------------------------

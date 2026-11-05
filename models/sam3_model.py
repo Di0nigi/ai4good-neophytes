@@ -5,7 +5,6 @@ import torchvision.models as models
 import open_clip
 
 from transformers import Sam3Model, Sam3Processor
-from models.sam3_losses import foreground_seg_loss  # keep if you use it
 from SAM.samPromptsDescriptions import speciesDict
 
 
