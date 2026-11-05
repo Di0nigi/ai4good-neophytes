@@ -5,6 +5,7 @@ import torchvision.models as models
 import open_clip
 
 from transformers import Sam3Model, Sam3Processor
+from transformers.modeling_outputs import BaseModelOutputWithPooling
 from SAM.samPromptsDescriptions import speciesDict
 
 
@@ -409,9 +410,18 @@ class Sam3EnsembleModel(nn.Module):
         prompt_embedding = prompt_embedding.unsqueeze(1)
 
 
+        text_outputs = BaseModelOutputWithPooling(
+            pooler_output=prompt_embedding
+        )
+
         sam_outputs = self.sam_model(
             pixel_values=images,
-            text_embeds=prompt_embedding,
+            text_embeds=text_outputs,
+            attention_mask=torch.ones(
+                prompt_embedding.shape[:2],
+                dtype=torch.long,
+                device=prompt_embedding.device,
+            ),
             return_dict=True
         )
 
