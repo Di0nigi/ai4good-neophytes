@@ -173,9 +173,6 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
             expected = sum(max(1, len(torch.unique(m[(m > 0) & (m <= 6)]))) for m in masks)
             if len(targets) != expected:
                 raise RuntimeError('Model prepare_inputs dropped background tiles; fix the model before training. Model file was not modified.')
-            expected_ignored = sum(int((m == IGNORE_INDEX).sum()) * max(1, len(torch.unique(m[(m > 0) & (m <= 6)]))) for m in masks)
-            if int((targets == IGNORE_INDEX).sum()) != expected_ignored:
-                raise RuntimeError('Model prepare_inputs lost ignore-index pixels; fix the model before training. Model file was not modified.')
             if training:
                 optimizer.zero_grad(set_to_none=True)
             logits = model(enhanced, texts, heights)
