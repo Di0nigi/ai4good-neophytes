@@ -8,6 +8,7 @@ The model is kept unchanged. Model contract violations stop training explicitly.
 """
 import argparse
 import json
+import math
 from pathlib import Path
 
 import torch
@@ -79,14 +80,6 @@ def dice_cce_loss(logits, targets, ignore_index=IGNORE_INDEX):
     return cce + 1 - (2 * intersection + 1e-6) / (denominator + 1e-6)
 
 
-def tile_stem(path):
-    """Match image/label tile IDs across known preprocessing suffixes."""
-    stem = Path(path).stem
-    for marker in ('_json_to_mask_', '_registered_resampled_'):
-        stem = stem.replace(marker, '_')
-    return stem
-
-
 def build_dataset(dirs, size, training):
     from samDataSet import SamNeophyteDataset
     from utils.transform_utils import get_transforms
@@ -98,23 +91,46 @@ def build_dataset(dirs, size, training):
     transforms += [{'type': 'Normalize', 'params': {'mean': [0, 0, 0], 'std': [1, 1, 1]}}]
     dataset = SamNeophyteDataset(
         image_dirs=[str(p) for p in dirs], classes=CLASSES,
-        transform=get_transforms(transforms), ignore_index=IGNORE_INDEX,
+        transform=get_transforms(transforms, additional_targets={'ndsm': 'float_mask'}),
+        load_ndsm=True, ignore_index=IGNORE_INDEX,
     )
     if not len(dataset):
         raise ValueError(f'No image/mask pairs found in {dirs}')
-    # The dataset sorts images and masks separately. Reject mismatched pairing.
-    for image, mask in zip(dataset.image_files, dataset.mask_files):
-        if tile_stem(image) != tile_stem(mask):
-            raise ValueError(f'Image/mask filenames do not match: {image}, {mask}')
+    validate_height_files(dataset)
     return dataset
+
+
+def validate_height_files(dataset):
+    """Require paired, aligned rasters; resizing alone cannot align geography."""
+    import rasterio
+
+    for kind, files in [('DSM', dataset.dsm_files), ('DTM', dataset.dtm_files)]:
+        if len(files) != len(dataset.image_files):
+            raise ValueError(f'{kind}: found {len(files)} files for {len(dataset.image_files)} images. '
+                             'Each split directory must contain matching dsm/ and dtm/ GeoTIFFs.')
+        for image, elevation in zip(dataset.image_files, files):
+            with rasterio.open(image) as rgb, rasterio.open(elevation) as height:
+                if (rgb.shape != height.shape or rgb.crs != height.crs
+                        or not rgb.transform.almost_equals(height.transform)):
+                    raise ValueError(f'{kind} is not on the RGB pixel grid: {elevation}. '
+                                     'Align elevation to RGB before training; automatic reprojection is not performed.')
 
 
 def collate_samples(samples):
     # Raster metadata can contain None or affine objects; the model needs tensors only.
-    return {key: torch.stack([sample[key] for sample in samples]) for key in ['image', 'mask']}
+    return {key: torch.stack([sample[key] for sample in samples]) for key in ['image', 'mask', 'ndsm']}
 
 
-def run_epoch(model, loader, device, optimizer=None, max_batches=None):
+def prepare_height_maps(ndsm, images, height_max_m):
+    """Encode metre-valued nDSM as three identical channels in [0, 1]."""
+    if ndsm.shape != (images.shape[0], 1, *images.shape[-2:]):
+        raise ValueError(f'nDSM must match RGB spatial dimensions; got {tuple(ndsm.shape)}')
+    heights = ndsm.to(device=images.device, dtype=images.dtype)
+    heights = torch.nan_to_num(heights, nan=0.0, posinf=0.0, neginf=0.0)
+    return (heights.clamp(0, height_max_m) / height_max_m).repeat(1, 3, 1, 1)
+
+
+def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0):
     training = optimizer is not None
     model.train(training)
     model.sam_model.eval()  # model.train() also switches the frozen SAM backbone.
@@ -130,7 +146,9 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None):
                 raise ValueError('Masks must contain class IDs 0–6, 254, 255, or -1.')
             if not (masks != IGNORE_INDEX).any():
                 continue
-            enhanced, heights, texts, labels, targets = model.prepare_inputs(images, masks)
+            height_maps = prepare_height_maps(batch['ndsm'], images, height_max_m)
+            enhanced, heights, texts, labels, targets = model.prepare_inputs(
+                images, masks, height_maps=height_maps)
             expected = sum(max(1, len(torch.unique(m[(m > 0) & (m <= 6)]))) for m in masks)
             if len(targets) != expected:
                 raise RuntimeError('Model prepare_inputs dropped background tiles; fix the model before training. Model file was not modified.')
@@ -169,13 +187,15 @@ def main():
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--image-size', type=int, default=1008)
     parser.add_argument('--max-proposals', type=int, default=32)
+    parser.add_argument('--height-max-m', type=float, default=10.0,
+                        help='nDSM clipping height in metres; DSM and DTM must use metres.')
     parser.add_argument('--max-batches', type=int, help='Limit each epoch for a smoke run.')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--check-data', action='store_true', help='Load one batch per split without downloading model weights.')
     args = parser.parse_args()
-    for key in ['batch_size', 'epochs', 'image_size', 'max_proposals', 'lr']:
-        if getattr(args, key) <= 0:
-            parser.error(f'{key} must be positive')
+    for key in ['batch_size', 'epochs', 'image_size', 'max_proposals', 'lr', 'height_max_m']:
+        if not math.isfinite(getattr(args, key)) or getattr(args, key) <= 0:
+            parser.error(f'{key} must be finite and positive')
     if args.num_workers < 0 or (args.max_batches is not None and args.max_batches <= 0):
         parser.error('num-workers must be nonnegative and max-batches must be positive')
     torch.manual_seed(args.seed)
@@ -191,19 +211,25 @@ def main():
         if args.check_data:
             batch = next(iter(loader))
             print({k: tuple(v.shape) for k, v in batch.items()})
+            heights = prepare_height_maps(batch['ndsm'], batch['image'], args.height_max_m)
+            print(f'Encoded height: shape={tuple(heights.shape)}, '
+                  f'range=[{heights.min().item():.3f}, {heights.max().item():.3f}]')
     if args.check_data:
         return
     from models.sam3_model import Sam3EnsembleModel
     device = torch.device(args.device)
     model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
-                              max_proposals=args.max_proposals, ignore_index=IGNORE_INDEX).to(device)
+                              max_proposals=args.max_proposals, ignore_index=IGNORE_INDEX,
+                              height_max_m=args.height_max_m).to(device)
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
     output = resolve_path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     best = float('inf')
     for epoch in range(1, args.epochs + 1):
-        train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches)
-        val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches)
+        train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
+                               height_max_m=args.height_max_m)
+        val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
+                             height_max_m=args.height_max_m)
         print(f'Epoch {epoch:03d}/{args.epochs}: train={train_loss:.5f}, val={val_loss:.5f}')
         checkpoint = dict(epoch=epoch, model_state_dict=model.state_dict(),
                           optimizer_state_dict=optimizer.state_dict(), train_loss=train_loss,
