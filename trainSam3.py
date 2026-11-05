@@ -7,8 +7,10 @@ Examples:
 The model is kept unchanged. Model contract violations stop training explicitly.
 """
 import argparse
+import getpass
 import json
 import math
+import os
 from pathlib import Path
 
 import torch
@@ -192,6 +194,18 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
     return total_loss / total_samples
 
 
+def login_to_huggingface():
+    """Read a token without echoing it; keep it out of checkpoint arguments."""
+    from huggingface_hub import login
+
+    token = getpass.getpass('Hugging Face token (hidden): ').strip()
+    if not token:
+        raise ValueError('Hugging Face token cannot be empty.')
+    login(token=token, add_to_git_credential=False)
+    # HF_TOKEN overrides cached credentials; use the entered token for this run.
+    os.environ['HF_TOKEN'] = token
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--paths-file', help='Subset paths JSON/YAML; relative paths use the script directory.')
@@ -199,6 +213,8 @@ def main():
     parser.add_argument('--val-dirs', nargs='+')
     parser.add_argument('--output-dir', default='checkpoints/sam3')
     parser.add_argument('--sam-checkpoint', default='facebook/sam3')
+    parser.add_argument('--hf-login', action='store_true',
+                        help='Prompt for a hidden Hugging Face token and save login locally.')
     parser.add_argument('--device', default='cuda' if torch.cuda.is_available() else 'cpu')
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=30)
@@ -235,6 +251,8 @@ def main():
                   f'range=[{heights.min().item():.3f}, {heights.max().item():.3f}]')
     if args.check_data:
         return
+    if args.hf_login:
+        login_to_huggingface()
     from models.sam3_model import Sam3EnsembleModel
     device = torch.device(args.device)
     model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
