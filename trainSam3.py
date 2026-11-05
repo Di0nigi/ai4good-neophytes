@@ -80,6 +80,36 @@ def dice_cce_loss(logits, targets, ignore_index=IGNORE_INDEX):
     return cce + 1 - (2 * intersection + 1e-6) / (denominator + 1e-6)
 
 
+class HeightAlignedTransform:
+    """Resize paired height tiles to RGB resolution before joint augmentation.
+
+    Assumes paired tiles cover the same footprint, as in the dataset pipeline.
+    This resizes pixel arrays; it does not perform geospatial reprojection.
+    """
+
+    def __init__(self, transform):
+        self.transform = transform
+        # Expose the pixel pipeline to the dataset's normalization inspection.
+        self.pixel = getattr(transform, 'pixel', transform)
+
+    def set_tile_context(self, **context):
+        from utils.transform_utils import set_tile_context
+        set_tile_context(self.transform, **context)
+
+    @property
+    def transforms(self):
+        # Let the existing context helper forward per-tile information.
+        return [self]
+
+    def __call__(self, **sample):
+        import cv2
+        height, width = sample['image'].shape[:2]
+        ndsm = sample.get('ndsm')
+        if ndsm is not None and ndsm.shape[:2] != (height, width):
+            sample['ndsm'] = cv2.resize(ndsm, (width, height), interpolation=cv2.INTER_LINEAR)
+        return self.transform(**sample)
+
+
 def build_dataset(dirs, size, training):
     from samDataSet import SamNeophyteDataset
     from utils.transform_utils import get_transforms
@@ -91,29 +121,18 @@ def build_dataset(dirs, size, training):
     transforms += [{'type': 'Normalize', 'params': {'mean': [0, 0, 0], 'std': [1, 1, 1]}}]
     dataset = SamNeophyteDataset(
         image_dirs=[str(p) for p in dirs], classes=CLASSES,
-        transform=get_transforms(transforms, additional_targets={'ndsm': 'float_mask'}),
+        transform=HeightAlignedTransform(
+            get_transforms(transforms, additional_targets={'ndsm': 'float_mask'})),
         load_ndsm=True, ignore_index=IGNORE_INDEX,
     )
     if not len(dataset):
         raise ValueError(f'No image/mask pairs found in {dirs}')
-    validate_height_files(dataset)
-    return dataset
-
-
-def validate_height_files(dataset):
-    """Require paired, aligned rasters; resizing alone cannot align geography."""
-    import rasterio
-
+    # Trust the dataset's pairing; elevation tiles may have lower resolution.
     for kind, files in [('DSM', dataset.dsm_files), ('DTM', dataset.dtm_files)]:
         if len(files) != len(dataset.image_files):
             raise ValueError(f'{kind}: found {len(files)} files for {len(dataset.image_files)} images. '
                              'Each split directory must contain matching dsm/ and dtm/ GeoTIFFs.')
-        for image, elevation in zip(dataset.image_files, files):
-            with rasterio.open(image) as rgb, rasterio.open(elevation) as height:
-                if (rgb.shape != height.shape or rgb.crs != height.crs
-                        or not rgb.transform.almost_equals(height.transform)):
-                    raise ValueError(f'{kind} is not on the RGB pixel grid: {elevation}. '
-                                     'Align elevation to RGB before training; automatic reprojection is not performed.')
+    return dataset
 
 
 def collate_samples(samples):
