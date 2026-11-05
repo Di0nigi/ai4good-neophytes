@@ -96,7 +96,9 @@ def build_dataset(dirs, size, training):
         raise ValueError(f'No image/mask pairs found in {dirs}')
     # The dataset sorts images and masks separately. Reject mismatched pairing.
     for image, mask in zip(dataset.image_files, dataset.mask_files):
-        if Path(image).stem != Path(mask).stem:
+        # Prepared labels insert this marker between the site and tile indices.
+        mask_stem = Path(mask).stem.replace('_json_to_mask_', '_')
+        if Path(image).stem != mask_stem:
             raise ValueError(f'Image/mask filenames do not match: {image}, {mask}')
     return dataset
 
