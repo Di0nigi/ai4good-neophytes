@@ -111,7 +111,7 @@ def main(cfg: DictConfig) -> None:
     model_class = SegmentationModel
     model_kwargs = {}
     if cfg.model.model_name == 'Sam3Ensemble':
-        from models.sam3_plm import Sam3EnsembleModel
+        from models.sam3_model import Sam3EnsembleModel
         model_class = Sam3EnsembleModel
         model_kwargs = {key: cfg.model[key] for key in (
             'sam_checkpoint', 'prompt_checkpoint', 'classifier_name',

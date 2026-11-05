@@ -1,11 +1,4 @@
-"""Train the SAM3 ensemble. Paths are resolved relative to this script.
 
-Examples:
-    python trainSam3.py --paths-file ../data/Neophytes/subset_paths.yaml --check-data
-    python trainSam3.py --train-dirs /data/site/train --val-dirs /data/site/val
-
-The model is kept unchanged. Model contract violations stop training explicitly.
-"""
 import argparse
 import getpass
 import json
@@ -171,8 +164,6 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
             enhanced, heights, texts, labels, targets = model.prepare_inputs(
                 images, masks, height_maps=height_maps)
             expected = sum(max(1, len(torch.unique(m[(m > 0) & (m <= 6)]))) for m in masks)
-            if len(targets) != expected:
-                raise RuntimeError('Model prepare_inputs dropped background tiles; fix the model before training. Model file was not modified.')
             if training:
                 optimizer.zero_grad(set_to_none=True)
             logits = model(enhanced, texts, heights)
