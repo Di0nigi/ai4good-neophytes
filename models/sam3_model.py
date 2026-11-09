@@ -175,9 +175,9 @@ class MaskClassifier(nn.Module):
 
 
 class PromptGeneratorSam(nn.Module):
-    def __init__(self, dimensions_in=1536, dimensions_out=0, emb_dims=512, attention_layer_num=8):
+    def __init__(self, emb_dims=512, dimensions_out=0, attention_layer_num=4):
         super().__init__()
-        self.dimsIn = dimensions_in
+        #self.dimsIn = dimensions_in
         self.dimsOut = dimensions_out
         self.embDims = emb_dims
         self.layerNum = attention_layer_num
@@ -186,11 +186,11 @@ class PromptGeneratorSam(nn.Module):
             'MobileCLIP2-S0', pretrained='dfndr2b')
         self.tokenizer = open_clip.get_tokenizer('MobileCLIP2-S0')
 
-        self.projector = nn.Linear(self.dimsIn, self.embDims)
+        #self.projector = nn.Linear(self.dimsIn, self.embDims)
         self.att = nn.ModuleList([nn.MultiheadAttention(self.embDims, num_heads=8, batch_first=True)
                                   for _ in range(self.layerNum)])
         self.norm = nn.ModuleList([nn.LayerNorm(self.embDims) for _ in range(self.layerNum)])
-        self.gelu = nn.ModuleList([nn.GELU() for _ in range(self.layerNum)])
+        self.gelu = nn.GELU()
         self.output = nn.Linear(self.embDims, self.dimsOut)
 
     def forward(self, X):
@@ -206,16 +206,18 @@ class PromptGeneratorSam(nn.Module):
         tEmb = self.clipModel.encode_text(tokens)
         tEmb = tEmb / tEmb.norm(dim=-1, keepdim=True)
 
-        embedding = torch.cat([hEmb, imgEmb, tEmb], dim=-1)
-        projected = self.projector(embedding)
-        outTensor = projected.unsqueeze(1)
+        embedding = torch.stack([hEmb, imgEmb, tEmb],dim=1)
+        #projected = self.projector(embedding)
+        outTensor = embedding
 
         for i in range(self.layerNum):
             out, _ = self.att[i](outTensor, outTensor, outTensor)
-            norm = self.norm[i](out) + outTensor
-            outTensor = self.gelu[i](norm)
+            norm = self.norm[i](out + outTensor)
+            outTensor = self.gelu(norm)
 
-        return self.output(outTensor.squeeze(1))
+        pooled = outTensor.mean(dim=1) 
+
+        return self.output(pooled)
 
 
 class Sam3EnsembleModel(nn.Module):
