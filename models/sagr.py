@@ -11,6 +11,26 @@ from torchmetrics.classification import (
 )
 
 
+@torch.no_grad()
+def propagate_node_labels(probs, edge_index, iters=2, alpha=0.5, conf_thresh=0.7):
+    """Smooth node probs over the graph; confident nodes keep their prediction."""
+    src, dst = edge_index[0], edge_index[1]
+    deg = torch.zeros(probs.size(0), device=probs.device, dtype=probs.dtype)
+    deg.index_add_(
+        0, dst, torch.ones(dst.numel(), device=probs.device, dtype=probs.dtype)
+    )
+    deg = deg.clamp(min=1.0)  # isolated nodes keep their own prob
+
+    confident = probs.max(dim=1).values > conf_thresh
+    out = probs
+    for _ in range(iters):
+        agg = torch.zeros_like(out)
+        agg.index_add_(0, dst, out[src])  # sum of neighbor probs
+        mixed = (1 - alpha) * out + alpha * (agg / deg[:, None])
+        out = torch.where(confident[:, None], out, mixed)
+    return out.argmax(dim=1)
+
+
 class HybridResNetBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(HybridResNetBlock, self).__init__()
@@ -46,9 +66,21 @@ class HybridResNet18GNN(pl.LightningModule):
         hidden_channels=64,
         class_weights=None,
         lr: float = 1e-3,
+        use_prediction_node_label_propagation: bool = True,
+        prediction_node_label_propagation_args: dict | None = None,
     ):
         super(HybridResNet18GNN, self).__init__()
         self.lr = lr
+        if prediction_node_label_propagation_args is None:
+            self.prediction_node_label_propagation_args = {
+                "iters": 2,
+                "alpha": 0.5,
+                "conf_thresh": 0.7,
+            }
+        else:
+            self.prediction_node_label_propagation_args = (
+                prediction_node_label_propagation_args
+            )
         self.initial_conv = SAGEConv(in_channels, hidden_channels)
         self.initial_bn = BatchNorm1d(hidden_channels)
         self.initial_relu = ReLU(inplace=False)
@@ -73,11 +105,44 @@ class HybridResNet18GNN(pl.LightningModule):
             )
 
         for split in ["train", "val", "test"]:
-            setattr(self, f"{split}_acc", MulticlassAccuracy(num_classes=num_classes, average="macro", ignore_index=-1))
-            setattr(self, f"{split}_iou", MulticlassJaccardIndex(num_classes=num_classes, average="macro", ignore_index=-1))
-            setattr(self, f"{split}_f1", MulticlassF1Score(num_classes=num_classes, average="macro", ignore_index=-1))
-            setattr(self, f"{split}_auc", MulticlassAUROC(num_classes=num_classes, average="macro", ignore_index=-1, thresholds=5))
-            setattr(self, f"{split}_f1_per_class", MulticlassF1Score(num_classes=num_classes, average=None, ignore_index=-1))
+            setattr(
+                self,
+                f"{split}_acc",
+                MulticlassAccuracy(
+                    num_classes=num_classes, average="macro", ignore_index=-1
+                ),
+            )
+            setattr(
+                self,
+                f"{split}_iou",
+                MulticlassJaccardIndex(
+                    num_classes=num_classes, average="macro", ignore_index=-1
+                ),
+            )
+            setattr(
+                self,
+                f"{split}_f1",
+                MulticlassF1Score(
+                    num_classes=num_classes, average="macro", ignore_index=-1
+                ),
+            )
+            setattr(
+                self,
+                f"{split}_auc",
+                MulticlassAUROC(
+                    num_classes=num_classes,
+                    average="macro",
+                    ignore_index=-1,
+                    thresholds=5,
+                ),
+            )
+            setattr(
+                self,
+                f"{split}_f1_per_class",
+                MulticlassF1Score(
+                    num_classes=num_classes, average=None, ignore_index=-1
+                ),
+            )
 
     def forward(self, x, edge_index):
         x = self.initial_conv(x, edge_index)
@@ -93,23 +158,26 @@ class HybridResNet18GNN(pl.LightningModule):
         x = self.block8(x, edge_index)
         x = self.fc(x)
 
-        return x  # Return raw logits, not log_softmax
+        return x
 
     def _shared_step(self, batch, stage):
         logits = self(batch.x, batch.edge_index)
+        probs = torch.softmax(logits, dim=1)
+        preds = propagate_node_labels(
+            probs, batch.edge_index, **self.prediction_node_label_propagation_args
+        )
         valid = batch.y >= 0
 
         if not valid.any():
             print(f"{stage} batch contains no labeled graph nodes.")
             return
 
-        # Ensure labels are within valid range
         num_classes = self.fc.out_features
         y_valid = batch.y[valid]
         if (y_valid >= num_classes).any():
             self.log(f"Warning: Found labels >= num_classes ({num_classes}). Clamping.")
             y_valid = torch.clamp(y_valid, max=num_classes - 1)
-        
+
         loss = F.cross_entropy(
             logits[valid],
             y_valid,
@@ -119,22 +187,35 @@ class HybridResNet18GNN(pl.LightningModule):
         preds = torch.argmax(logits, dim=1)
         batch_size = int(valid.sum())
 
-        self.log(f"{stage}_loss", loss, on_step=stage == "train", on_epoch=True,
-                 prog_bar=True, batch_size=batch_size)
+        self.log(
+            f"{stage}_loss",
+            loss,
+            on_step=stage == "train",
+            on_epoch=True,
+            prog_bar=True,
+            batch_size=batch_size,
+        )
         getattr(self, f"{stage}_acc").update(preds[valid].detach(), y_valid.detach())
         getattr(self, f"{stage}_iou").update(preds[valid].detach(), y_valid.detach())
         getattr(self, f"{stage}_f1").update(preds[valid].detach(), y_valid.detach())
-        getattr(self, f"{stage}_auc").update(logits[valid].detach(), y_valid.detach().long())
-        getattr(self, f"{stage}_f1_per_class").update(preds[valid].detach(), y_valid.detach())
+        getattr(self, f"{stage}_auc").update(
+            logits[valid].detach(), y_valid.detach().long()
+        )
+        getattr(self, f"{stage}_f1_per_class").update(
+            preds[valid].detach(), y_valid.detach()
+        )
         return loss
 
     def _epoch_end(self, stage, prog_bar=True):
-        self.log_dict({
-            f"{stage}_acc": getattr(self, f"{stage}_acc").compute(),
-            f"{stage}_iou": getattr(self, f"{stage}_iou").compute(),
-            f"{stage}_f1": getattr(self, f"{stage}_f1").compute(),
-            f"{stage}_auc": getattr(self, f"{stage}_auc").compute(),
-        }, prog_bar=prog_bar)
+        self.log_dict(
+            {
+                f"{stage}_acc": getattr(self, f"{stage}_acc").compute(),
+                f"{stage}_iou": getattr(self, f"{stage}_iou").compute(),
+                f"{stage}_f1": getattr(self, f"{stage}_f1").compute(),
+                f"{stage}_auc": getattr(self, f"{stage}_auc").compute(),
+            },
+            prog_bar=prog_bar,
+        )
 
         for i, f1 in enumerate(getattr(self, f"{stage}_f1_per_class").compute()):
             self.log(f"{stage}_f1_class_{i}", f1, prog_bar=False)
