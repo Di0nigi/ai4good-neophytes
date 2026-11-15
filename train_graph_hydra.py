@@ -100,7 +100,7 @@ def main(cfg: DictConfig) -> None:
         batch_size_val=cfg.data.batch_size_val,
         batch_size_test=cfg.data.batch_size_test,
         num_workers=cfg.data.num_workers,
-        graph_kwargs=cfg.graph_model_configurations.felzenszwalb,
+        graph_kwargs=cfg.model.graph_model_configurations.felzenszwalb,
         graph_cache_dir=cfg.data.get("graph_cache_dir", "./graph_cache"),
         graph_cache_train=cfg.data.get("graph_cache_train", False),
     )
@@ -121,8 +121,8 @@ def main(cfg: DictConfig) -> None:
         in_channels=in_channels,
         num_classes=cfg.model.num_classes,
         lr=cfg.model.lr,
-        use_prediction_node_label_propagation=cfg.graph_model_configurations.use_prediction_node_label_propagation,
-        prediction_node_label_propagation_args=cfg.graph_model_configurations.prediction_node_label_propagation_args
+        use_prediction_node_label_propagation=cfg.model.graph_model_configurations.use_prediction_node_label_propagation,
+        prediction_node_label_propagation_args=cfg.model.graph_model_configurations.prediction_node_label_propagation_args
     )
 
     # %% training
