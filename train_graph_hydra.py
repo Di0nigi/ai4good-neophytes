@@ -100,13 +100,9 @@ def main(cfg: DictConfig) -> None:
         batch_size_val=cfg.data.batch_size_val,
         batch_size_test=cfg.data.batch_size_test,
         num_workers=cfg.data.num_workers,
-        graph_kwargs={
-            "felz_scale": 100,
-            "felz_sigma": 0.4,
-            "felz_min_size": 30,
-        },
+        graph_kwargs=cfg.graph_model_configurations.felzenszwalb,
         graph_cache_dir=cfg.data.get("graph_cache_dir", "./graph_cache"),
-        graph_cache_train=cfg.data.get("graph_cache_train", True),
+        graph_cache_train=cfg.data.get("graph_cache_train", False),
     )
 
     dataModule.prepare_data()
@@ -124,7 +120,9 @@ def main(cfg: DictConfig) -> None:
     model = HybridResNet18GNN(
         in_channels=in_channels,
         num_classes=cfg.model.num_classes,
-        lr=cfg.model.lr
+        lr=cfg.model.lr,
+        use_prediction_node_label_propagation=cfg.graph_model_configurations.use_prediction_node_label_propagation,
+        prediction_node_label_propagation_args=cfg.graph_model_configurations.prediction_node_label_propagation_args
     )
 
     # %% training
