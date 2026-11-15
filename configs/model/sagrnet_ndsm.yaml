@@ -1,0 +1,23 @@
+defaults:
+  - model
+
+graph_data:
+  graph_cache_dir: "./tmp"
+
+name: ${model.model_name}_${model.encoder_name}_nDSM
+
+graph_model_configurations:
+  use_prediction_node_label_propagation: True
+  prediction_node_label_propagation_args:
+    iters: 2
+    alpha: 0.5
+    conf_thresh: 0.7
+  felzenszwalb:
+    felz_scale: 100
+    felz_sigma: 0.4
+    felz_min_size: 30
+in_channels:
+  image: 3
+  ndsm: 1
+model_name: SAGRNet
+encoder_name: sage_gat18
