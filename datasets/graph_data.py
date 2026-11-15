@@ -161,7 +161,7 @@ def make_adjacency_kdtree(segments, radius=5):
         centroids[prop.label - 1] = prop.centroid
 
     tree = KDTree(centroids)
-    neighbors = tree.query_ball_tree(tree, radius)
+    neighbors = tree.query_radius(centroids, r=radius)
 
     pairs = [
         (i, j)
