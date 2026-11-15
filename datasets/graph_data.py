@@ -7,21 +7,19 @@ import os
 from pathlib import Path
 
 import numpy as np
-import pytorch_lightning as pl
 import rasterio
 import torch
 from skimage.measure import regionprops
 from skimage.segmentation import felzenszwalb
+from sklearn.neighbors import KDTree
 from torch.utils.data import DataLoader as TorchDataLoader
-from torch.utils.data import Dataset, WeightedRandomSampler
+from torch.utils.data import WeightedRandomSampler
 from torch_geometric.data import Batch, Data
-from torch_geometric.loader import DataLoader as PyGDataLoader
 
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
 
-# Bump whenever the graph/feature code changes, so stale disk caches are ignored.
-GRAPH_CACHE_VERSION = "2"
+GRAPH_CACHE_VERSION = "3"
 
 
 def read_aligned_raster(path, reference, bands=None):
@@ -152,199 +150,31 @@ def make_adjacency(segments):
     return torch.from_numpy(edges.T.copy()).long()
 
 
-def build_tile_graph(
-    record,
-    class_values,
-    *,
-    image_bands=(1, 2, 3),
-    image_scale=255.0,
-    felz_scale=100,
-    felz_sigma=0.5,
-    felz_min_size=20,
-    min_labeled_fraction=0.25,
-):
-    """
-    Build one PyG Data graph from a tile record.
+def make_adjacency_kdtree(segments, radius=5):
+    """Connect segments whose centroids are within `radius` pixels (KDTree)."""
+    props = regionprops(segments + 1)
+    if not props:
+        return torch.empty((2, 0), dtype=torch.long)
 
-    class_values must be the SAME global class list for every tile,
-    e.g. [1, 3, 7], not classes discovered independently per tile.
-    """
-    class_to_id = {int(value): i for i, value in enumerate(class_values)}
+    centroids = np.zeros((len(props), 2), dtype=np.float64)
+    for prop in props:
+        centroids[prop.label - 1] = prop.centroid
 
-    with rasterio.open(record["image"]) as src:
-        image_chw = src.read(list(image_bands)).astype(np.float32)
-        reference = src
+    tree = KDTree(centroids)
+    neighbors = tree.query_ball_tree(tree, radius)
 
-        image = np.moveaxis(image_chw, 0, -1)
+    pairs = [
+        (i, j)
+        for i, neighbors_list in enumerate(neighbors)
+        for j in neighbors_list
+        if i != j
+    ]
+    if not pairs:
+        return torch.empty((2, 0), dtype=torch.long)
 
-        if image_scale is not None:
-            image = image / float(image_scale)
-
-        mask = read_aligned_raster(record["mask"], reference)[0].astype(np.int64)
-
-        extra_rasters = []
-        for key in ("dsm", "dstm"):
-            if record.get(key):
-                extra = read_aligned_raster(record[key], reference)[0]
-                extra_rasters.append(extra)
-
-    if image.shape[:2] != mask.shape:
-        raise ValueError(f"Image/mask dimensions differ for {record['image']}.")
-
-    # Keep your dataset's ignore values here.
-    mask[np.isin(mask, [254, 255])] = -1
-
-    # Felzenszwalb expects an HWC image. Segmentation IDs are relabeled
-    # contiguously because downstream node IDs must be 0, ..., N-1.
-    raw_segments = felzenszwalb(
-        image,
-        scale=felz_scale,
-        sigma=felz_sigma,
-        min_size=felz_min_size,
-        channel_axis=-1,
-    )
-    _, segments = np.unique(raw_segments, return_inverse=True)
-    segments = segments.reshape(raw_segments.shape).astype(np.int64)
-
-    x = extract_node_features(image, segments, extra_rasters)
-    y = make_node_labels(
-        mask,
-        segments,
-        class_to_id,
-        min_labeled_fraction=min_labeled_fraction,
-    )
-    edge_index = make_adjacency(segments)
-
-    return Data(
-        x=torch.from_numpy(x),
-        edge_index=edge_index,
-        y=torch.from_numpy(y),
-        num_nodes=x.shape[0],
-    )
-
-
-class TileGraphDataset(Dataset):
-    def __init__(
-        self,
-        records,
-        class_values,
-        cache_dir,
-        graph_kwargs=None,
-    ):
-        self.records = list(records)
-        self.class_values = list(class_values)
-        self.cache_dir = Path(cache_dir) if cache_dir else None
-        self.graph_kwargs = graph_kwargs or {}
-
-        if self.cache_dir:
-            self.cache_dir.mkdir(parents=True, exist_ok=True)
-
-    def __len__(self):
-        return len(self.records)
-
-    def _cache_path(self, record):
-        # Include paths, class mapping, and graph settings in the cache key.
-        key_data = {
-            "record": {k: str(v) for k, v in record.items()},
-            "classes": self.class_values,
-            "kwargs": self.graph_kwargs,
-        }
-        key = hashlib.sha1(json.dumps(key_data, sort_keys=True).encode()).hexdigest()
-        return self.cache_dir / f"{key}.pt"
-
-    def __getitem__(self, index):
-        record = self.records[index]
-
-        if self.cache_dir:
-            cache_path = self._cache_path(record)
-            if cache_path.exists():
-                return torch.load(cache_path, map_location="cpu", weights_only=False)
-
-        graph = build_tile_graph(
-            record,
-            self.class_values,
-            **self.graph_kwargs,
-        )
-
-        if self.cache_dir:
-            cache_path = self._cache_path(record)
-            temp_path = cache_path.with_suffix(".tmp")
-            torch.save(graph, temp_path)
-            temp_path.replace(cache_path)
-
-        return graph
-
-
-class TileGraphDataModule(pl.LightningDataModule):
-    def __init__(
-        self,
-        train_records,
-        val_records,
-        class_values,
-        cache_dir,
-        batch_size=4,
-        num_workers=4,
-        graph_kwargs=None,
-    ):
-        super().__init__()
-        self.train_records = train_records
-        self.val_records = val_records
-        self.class_values = class_values
-        self.cache_dir = cache_dir
-        self.batch_size = batch_size
-        self.num_workers = num_workers
-        self.graph_kwargs = graph_kwargs or {}
-
-    def setup(self, stage=None):
-        self.train_dataset = TileGraphDataset(
-            self.train_records,
-            self.class_values,
-            Path(self.cache_dir) / "train",
-            self.graph_kwargs,
-        )
-        self.val_dataset = TileGraphDataset(
-            self.val_records,
-            self.class_values,
-            Path(self.cache_dir) / "val",
-            self.graph_kwargs,
-        )
-
-    def _get_loader_kwargs(self, shuffle=False):
-        """Get DataLoader kwargs with proper multiprocessing support."""
-        kwargs = {
-            'batch_size': self.batch_size,
-            'num_workers': self.num_workers,
-            'persistent_workers': self.num_workers > 0,
-            'pin_memory': False,
-            'shuffle': shuffle,
-        }
-        
-        if self.num_workers > 0:
-            kwargs['prefetch_factor'] = 2
-            # Use 'fork' on Linux, 'spawn' on other platforms
-            import sys
-            kwargs['multiprocessing_context'] = 'spawn' if sys.platform != 'linux' else 'fork'
-        
-        return kwargs
-
-    def _collate_graphs(self, batch):
-        """Collate function that batches PyG Data objects into a Batch."""
-        # Batch can handle variable-sized graphs
-        return Batch.from_data_list(batch)
-
-    def train_dataloader(self):
-        return TorchDataLoader(
-            self.train_dataset,
-            collate_fn=self._collate_graphs,
-            **self._get_loader_kwargs(shuffle=True)
-        )
-
-    def val_dataloader(self):
-        return TorchDataLoader(
-            self.val_dataset,
-            collate_fn=self._collate_graphs,
-            **self._get_loader_kwargs()
-        )
+    pairs = np.unique(np.asarray(pairs, dtype=np.int64), axis=0)
+    edges = np.concatenate([pairs, pairs[:, ::-1]], axis=0)
+    return torch.from_numpy(edges.T.copy()).long()
 
 
 def _as_numpy(value):
@@ -404,8 +234,6 @@ class NeophyteGraphDataset(NeophyteDataset):
     ):
         super().__init__(*args, **kwargs)
 
-        # These must match the pixel values in the mask returned by
-        # NeophyteDataset, after its value_mapping has been applied.
         self.graph_class_values = (
             list(range(self.num_classes))
             if graph_class_values is None
@@ -417,8 +245,6 @@ class NeophyteGraphDataset(NeophyteDataset):
             self.graph_cache_dir.mkdir(parents=True, exist_ok=True)
 
     def _cache_path(self, idx):
-        # Key on the input files (path + mtime + size), the graph settings, the
-        # mask mapping, and the transforms, so any change rebuilds the graph.
         files = [self.image_files[idx], self.mask_files[idx]]
         if self.load_dsm:
             files.append(self.dsm_files[idx])
@@ -455,8 +281,6 @@ class NeophyteGraphDataset(NeophyteDataset):
         graph = self._build_graph(idx)
 
         if self.graph_cache_dir:
-            # Atomic write; the pid suffix keeps concurrent workers from
-            # clobbering each other's temp file for the same key.
             temp_path = cache_path.with_suffix(f".tmp{os.getpid()}")
             torch.save(graph, temp_path)
             temp_path.replace(cache_path)
@@ -465,7 +289,6 @@ class NeophyteGraphDataset(NeophyteDataset):
 
     def _build_graph(self, idx):
         sample = super().__getitem__(idx)
-
         image = _image_hwc(sample["image"])
         mask = _as_numpy(sample["mask"]).astype(np.int64, copy=False)
 
@@ -511,7 +334,7 @@ class NeophyteGraphDataset(NeophyteDataset):
             {int(v): i for i, v in enumerate(self.graph_class_values)},
             min_labeled_fraction=self.graph_kwargs.get("min_labeled_fraction", 0.25),
         )
-        edge_index = make_adjacency(segments)
+        edge_index = make_adjacency_kdtree(segments)
 
         return Data(
             x=torch.from_numpy(x),
@@ -613,7 +436,6 @@ class NeophyteGraphDataModule(NeophyteDataModule):
         
         if self.num_workers > 0:
             kwargs['prefetch_factor'] = 2
-            # Use 'fork' on Linux, 'spawn' on other platforms
             import sys
             kwargs['multiprocessing_context'] = 'spawn' if sys.platform != 'linux' else 'fork'
         
