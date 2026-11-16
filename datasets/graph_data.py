@@ -356,6 +356,7 @@ class NeophyteGraphDataModule(NeophyteDataModule):
         graph_kwargs=None,
         graph_cache_dir=None,
         graph_cache_train=False,
+        graph_kdtree_radius: int = 0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
