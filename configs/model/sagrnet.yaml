@@ -4,7 +4,7 @@ defaults:
 graph_data:
   graph_cache_dir: "./tmp"
 
-graph_model_configurations:
+graph_config:
   use_prediction_node_label_propagation: True
   prediction_node_label_propagation_args:
     iters: 2
@@ -14,6 +14,6 @@ graph_model_configurations:
     felz_scale: 100
     felz_sigma: 0.4
     felz_min_size: 30
-
+  graph_kdtree_radius: 60
 model_name: SAGRNet
 encoder_name: sage_gat18

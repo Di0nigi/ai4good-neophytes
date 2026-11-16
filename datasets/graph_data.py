@@ -230,6 +230,7 @@ class NeophyteGraphDataset(NeophyteDataset):
         graph_class_values=None,
         graph_kwargs=None,
         graph_cache_dir=None,
+        graph_kdtree_radius: int = 0,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -240,6 +241,7 @@ class NeophyteGraphDataset(NeophyteDataset):
             else list(graph_class_values)
         )
         self.graph_kwargs = graph_kwargs or {}
+        self.graph_kdtree_radius = graph_kdtree_radius
         self.graph_cache_dir = Path(graph_cache_dir) if graph_cache_dir else None
         if self.graph_cache_dir:
             self.graph_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -334,8 +336,10 @@ class NeophyteGraphDataset(NeophyteDataset):
             {int(v): i for i, v in enumerate(self.graph_class_values)},
             min_labeled_fraction=self.graph_kwargs.get("min_labeled_fraction", 0.25),
         )
-        edge_index = make_adjacency_kdtree(segments)
-
+        if self.graph_kdtree_radius > 0:
+            edge_index = make_adjacency_kdtree(segments, self.graph_kdtree_radius)
+        else:
+            edge_index =make_adjacency(segments)
         return Data(
             x=torch.from_numpy(x),
             edge_index=edge_index,

@@ -10,7 +10,7 @@ from models.sagr import HybridResNet18GNN
 
 def main():
 
-    df = pd.read_csv("/zfs/ai4good/datasets/Neophytes/stats_imagewise.csv")
+    df = pd.read_csv("stats_imagewise.csv")
 
     df = df[df["site"] == "Aarau_1_1"]
     df["image"] = df["img_path"].str.replace(
