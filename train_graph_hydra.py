@@ -113,7 +113,6 @@ def main(cfg: DictConfig) -> None:
 
     # # sanity check: one batch through the pipeline before the model is built
     batch = next(iter(dataModule.train_dataloader()))
-    print(batch)
     in_channels = batch.x.shape[1]
 
     # %% model
@@ -122,7 +121,7 @@ def main(cfg: DictConfig) -> None:
         num_classes=cfg.model.num_classes,
         lr=cfg.model.lr,
         use_prediction_node_label_propagation=cfg.model.graph_model_configurations.use_prediction_node_label_propagation,
-        prediction_node_label_propagation_args=cfg.model.graph_model_configurations.prediction_node_label_propagation_args
+        prediction_node_label_propagation_args=cfg.model.graph_model_configurations.prediction_node_label_propagation_args,
     )
 
     # %% training
@@ -145,7 +144,13 @@ def main(cfg: DictConfig) -> None:
     if os.path.exists(last_ckpt_path):
         print(f"Loading weights from: {last_ckpt_path}")
         model = HybridResNet18GNN.load_from_checkpoint(
-            last_ckpt_path, weights_only=False
+            last_ckpt_path,
+            weights_only=False,
+            in_channels=in_channels,
+            num_classes=cfg.model.num_classes,
+            lr=cfg.model.lr,
+            use_prediction_node_label_propagation=cfg.model.graph_model_configurations.use_prediction_node_label_propagation,
+            prediction_node_label_propagation_args=cfg.model.graph_model_configurations.prediction_node_label_propagation_args,
         ).to(device)
 
     start_time = time.time()
@@ -161,7 +166,12 @@ def main(cfg: DictConfig) -> None:
     ckpt_path = trainer.checkpoint_callback.best_model_path
     print("ckpt_path: ", ckpt_path)
     model = HybridResNet18GNN.load_from_checkpoint(ckpt_path, weights_only=False).to(
-        device
+        device,
+        in_channels=in_channels,
+        num_classes=cfg.model.num_classes,
+        lr=cfg.model.lr,
+        use_prediction_node_label_propagation=cfg.model.graph_model_configurations.use_prediction_node_label_propagation,
+        prediction_node_label_propagation_args=cfg.model.graph_model_configurations.prediction_node_label_propagation_args,
     )
     model.eval()
     trainer.test(model=model, dataloaders=dataModule)
