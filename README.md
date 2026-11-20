@@ -324,3 +324,60 @@ Swapping one line of a `defaults` list is therefore a whole experiment: the five
   hides false positives on empty ground.
 
 ---
+
+## SAM3 ensemble evaluation
+
+Run the trained binary prompt-conditioned ensemble on all six species per tile:
+
+```bash
+python evalSam3.py \
+  --checkpoint checkpoints/sam3/sam3_checkpoint_best.pth \
+  --device cuda \
+  --threshold 0.5 \
+  --output-dir outputs/sam3_eval
+```
+
+Add `--hf-login` for the hidden token prompt if needed. Specify dataset folders
+with `--test-dirs /data/site/test ...`, or use `--paths-file subset_paths.yaml`
+with an `image_dir.test` list. Without either, the script tries the downloaded
+subset paths and then `configs/data/split_local.yaml`. Relative paths use the
+repository directory. Use the same split convention as the training experiment;
+a checkpoint does not establish that a proposed test folder was held out.
+
+Image size, height scaling limit, SAM backbone identifier, and proposal count
+are taken from the checkpoint's configuration unless explicitly overridden.
+Evaluation reuses the training script's deterministic RGB/nDSM preprocessing.
+It never calls the model's ground-truth-dependent `prepare_inputs` method.
+
+For each species, scores are `softmax(binary_logits)[:, 1]`. The combined map
+selects the species with the largest score at each pixel. If that winning score
+is below `--threshold` (default 0.5), the pixel gets ID 0 (nothing); otherwise it
+gets species ID 1–6. Ties select the lowest species ID. Setting the threshold to
+0 disables rejection. These are independently learned binary probabilities,
+not a joint calibrated six-class distribution or SAM proposal scores. Select
+any alternative threshold on validation data (`--split val`), then keep it
+fixed for test evaluation.
+
+Prompts run sequentially, with gradients disabled, so the GPU batch is not
+expanded sixfold. `--max-batches 1 --no-save-maps` provides a short smoke run.
+A smoke run reports metrics for only the processed subset.
+
+Outputs:
+
+- `metrics.json`: per-species and macro precision, recall, IoU, F1, confusion
+  matrix (rows=true, columns=predicted), evaluated tile count, and settings.
+- `per_species.csv`: the six species' metrics and TP/FP/FN pixel counts.
+- `maps/000000_labels.png`: combined IDs 0–6 for each tile.
+- `maps/000000_confidence.pt`: winning foreground probabilities, including on
+  rejected pixels, saved as a CPU tensor.
+- `maps/000000_color.png`: color previews for the first `--save-previews` tiles
+  (default 10); black means nothing.
+- `manifest.json`: the mapping from numeric output IDs to source image paths.
+
+`--no-save-maps` writes metrics only. Background is excluded from macro means,
+but species predictions on background count as false positives. Values -1,
+254, and 255 are excluded from metrics; their predicted map pixels are still
+saved. Undefined ratios are JSON null / blank CSV cells and excluded from the
+corresponding macro mean; the JSON records how many species contributed.
+All metrics and output maps use the resized input grid (normally 1008 × 1008),
+not the original tile resolution. PNGs have no geographic metadata.
