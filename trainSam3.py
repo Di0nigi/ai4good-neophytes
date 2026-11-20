@@ -146,7 +146,8 @@ def prepare_height_maps(ndsm, images, height_max_m):
     return (heights.clamp(0, height_max_m) / height_max_m).repeat(1, 3, 1, 1)
 
 
-def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0):
+def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0,
+              batch_logger=None, log_every=10):
     training = optimizer is not None
     model.train(training)
     model.sam_model.eval()  # model.train() also switches the frozen SAM backbone.
@@ -179,6 +180,11 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
                 optimizer.step()
             total_loss += loss.item() * len(targets)
             total_samples += len(targets)
+            if index % log_every == 0:
+                phase = 'Train' if training else 'Validation'
+                print(f'{phase} batch {index + 1}: loss={loss.item():.5f}', flush=True)
+                if batch_logger is not None:
+                    batch_logger(index + 1, loss.item())
     if not total_samples:
         raise ValueError('Epoch contained no valid training targets.')
     return total_loss / total_samples
@@ -200,6 +206,7 @@ def login_to_huggingface():
 def wandb_session(args, output, metadata):
     """Keep W&B optional and close the run on success or training failure."""
     if not args.wandb:
+        print('W&B disabled. Add --wandb to enable logging.', flush=True)
         yield None
         return
     try:
@@ -208,9 +215,23 @@ def wandb_session(args, output, metadata):
         raise RuntimeError('W&B logging requires wandb: pip install wandb') from exc
     # Only CLI settings and explicit metadata are logged, never environment tokens.
     config = dict(vars(args), **metadata)
+    print(f'Initializing W&B: project={args.wandb_project}, '
+          f'mode={args.wandb_mode or os.environ.get("WANDB_MODE", "online")}', flush=True)
     with wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                     name=args.wandb_name, mode=args.wandb_mode,
                     dir=str(output), config=config) as run:
+        mode = run.settings.mode
+        print(f'W&B ready: mode={mode}, local logs={run.dir}', flush=True)
+        if mode == 'online':
+            print(f'W&B run: {run.url}', flush=True)
+        else:
+            print('W&B is not online; this run will not update the live dashboard.', flush=True)
+        run.define_metric('epoch')
+        for metric in ['train/loss', 'val/loss', 'train/learning_rate',
+                       'val/best_loss', 'time/epoch_seconds']:
+            run.define_metric(metric, step_metric='epoch')
+        for phase in ['train', 'val']:
+            run.define_metric(f'{phase}/batch_loss', step_metric=f'{phase}/batch')
         yield run
 
 
@@ -240,6 +261,8 @@ def main():
     parser.add_argument('--wandb-name', help='Optional run display name.')
     parser.add_argument('--wandb-mode', choices=['online', 'offline'], default=None,
                         help='Defaults to W&B settings / WANDB_MODE.')
+    parser.add_argument('--wandb-log-every', type=int, default=10,
+                        help='Print/log batch loss every N batches, starting with the first.')
     parser.add_argument('--check-data', action='store_true', help='Load one batch per split without downloading model weights.')
     args = parser.parse_args()
     for key in ['batch_size', 'epochs', 'image_size', 'max_proposals', 'lr', 'height_max_m']:
@@ -247,6 +270,8 @@ def main():
             parser.error(f'{key} must be finite and positive')
     if args.num_workers < 0 or (args.max_batches is not None and args.max_batches <= 0):
         parser.error('num-workers must be nonnegative and max-batches must be positive')
+    if args.wandb_log_every <= 0:
+        parser.error('wandb-log-every must be positive')
     torch.manual_seed(args.seed)
     train_dirs, val_dirs = get_dirs(args)
     loaders = []
@@ -267,12 +292,6 @@ def main():
         return
     if args.hf_login:
         login_to_huggingface()
-    from models.sam3_model import Sam3EnsembleModel
-    device = torch.device(args.device)
-    model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
-                              max_proposals=args.max_proposals, ignore_index=IGNORE_INDEX,
-                              height_max_m=args.height_max_m).to(device)
-    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
     output = resolve_path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     metadata = {
@@ -280,16 +299,39 @@ def main():
         'val_dirs_resolved': [str(p) for p in val_dirs],
         'train_tiles': len(loaders[0].dataset),
         'val_tiles': len(loaders[1].dataset),
-        'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
     }
     with wandb_session(args, output, metadata) as run:
+        print('Loading SAM3 ensemble and pretrained weights...', flush=True)
+        from models.sam3_model import Sam3EnsembleModel
+        device = torch.device(args.device)
+        model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
+                                  max_proposals=args.max_proposals, ignore_index=IGNORE_INDEX,
+                                  height_max_m=args.height_max_m).to(device)
+        optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+        if run is not None:
+            run.config.update({'trainable_parameters': sum(
+                p.numel() for p in model.parameters() if p.requires_grad)})
+        print('Model ready; starting training.', flush=True)
         best = float('inf')
         for epoch in range(1, args.epochs + 1):
             started = time.perf_counter()
+            print(f'Epoch {epoch}/{args.epochs}: training...', flush=True)
+            def log_batch(phase, loader):
+                if run is None:
+                    return None
+                def log(index, loss):
+                    run.log({f'{phase}/batch': (epoch - 1) * len(loader) + index,
+                             f'{phase}/batch_loss': loss})
+                return log
             train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
-                                   height_max_m=args.height_max_m)
+                                   height_max_m=args.height_max_m,
+                                   batch_logger=log_batch('train', loaders[0]),
+                                   log_every=args.wandb_log_every)
+            print(f'Epoch {epoch}/{args.epochs}: validating...', flush=True)
             val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
-                                 height_max_m=args.height_max_m)
+                                 height_max_m=args.height_max_m,
+                                 batch_logger=log_batch('val', loaders[1]),
+                                 log_every=args.wandb_log_every)
             print(f'Epoch {epoch:03d}/{args.epochs}: train={train_loss:.5f}, val={val_loss:.5f}')
             checkpoint = dict(epoch=epoch, model_state_dict=model.state_dict(),
                               optimizer_state_dict=optimizer.state_dict(), train_loss=train_loss,
@@ -307,7 +349,7 @@ def main():
                     'train/learning_rate': optimizer.param_groups[0]['lr'],
                     'val/best_loss': best,
                     'time/epoch_seconds': time.perf_counter() - started,
-                }, step=epoch)
+                })
                 if improved:
                     run.summary['best_epoch'] = epoch
                     run.summary['best_val_loss'] = best

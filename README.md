@@ -414,3 +414,11 @@ The run closes on normal completion or a training exception. Model weights
 continue to be saved locally; this integration does not upload checkpoints or
 add model/gradient watching. Without `--wandb`, training does not import W&B.
 `--check-data` does not start a W&B run.
+
+W&B starts before pretrained model loading, and the terminal prints the effective
+mode, local log directory, and online run URL. Training prints stage transitions
+and batch losses with flushed output. Batch loss is logged from the first batch,
+then every `--wandb-log-every` batches (default 10); use 1 to log every batch.
+Batch and epoch charts have separate step axes. Epoch aggregate metrics still
+appear only after training and validation complete. If logging is not enabled,
+the script explicitly prints that `--wandb` is required.
