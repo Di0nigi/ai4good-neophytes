@@ -381,3 +381,36 @@ saved. Undefined ratios are JSON null / blank CSV cells and excluded from the
 corresponding macro mean; the JSON records how many species contributed.
 All metrics and output maps use the resized input grid (normally 1008 × 1008),
 not the original tile resolution. PNGs have no geographic metadata.
+
+### W&B logging for SAM3 training
+
+Logging is optional. Enable it with:
+
+```bash
+wandb login
+python trainSam3.py --wandb --wandb-project sam3-neophytes --wandb-name experiment-1
+```
+
+Append your usual data, device, and Hugging Face options. Use `--wandb-entity`
+for a specific username/team. Authentication uses your existing W&B login or
+`WANDB_API_KEY`; the script does not put API keys in its logged configuration
+or checkpoints. `wandb` is already listed in `environment.yml`.
+
+For a compute node without internet:
+
+```bash
+python trainSam3.py --wandb --wandb-mode offline
+```
+
+Local W&B files are stored under the chosen checkpoint output directory.
+They can be uploaded later using `wandb sync <offline-run-directory>`.
+`--wandb-mode` otherwise respects W&B settings such as `WANDB_MODE`.
+
+Each completed epoch logs `train/loss`, `val/loss`, `train/learning_rate`,
+`val/best_loss`, and `time/epoch_seconds`. Run configuration includes CLI
+settings, resolved dataset folders, split sizes, and trainable parameter count.
+The best validation loss and its epoch are also recorded in the run summary.
+The run closes on normal completion or a training exception. Model weights
+continue to be saved locally; this integration does not upload checkpoints or
+add model/gradient watching. Without `--wandb`, training does not import W&B.
+`--check-data` does not start a W&B run.

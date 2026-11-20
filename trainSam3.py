@@ -4,6 +4,8 @@ import getpass
 import json
 import math
 import os
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -194,6 +196,24 @@ def login_to_huggingface():
     os.environ['HF_TOKEN'] = token
 
 
+@contextmanager
+def wandb_session(args, output, metadata):
+    """Keep W&B optional and close the run on success or training failure."""
+    if not args.wandb:
+        yield None
+        return
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError('W&B logging requires wandb: pip install wandb') from exc
+    # Only CLI settings and explicit metadata are logged, never environment tokens.
+    config = dict(vars(args), **metadata)
+    with wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                    name=args.wandb_name, mode=args.wandb_mode,
+                    dir=str(output), config=config) as run:
+        yield run
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--paths-file', help='Subset paths JSON/YAML; relative paths use the script directory.')
@@ -214,6 +234,12 @@ def main():
                         help='nDSM clipping height in metres; DSM and DTM must use metres.')
     parser.add_argument('--max-batches', type=int, help='Limit each epoch for a smoke run.')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases logging.')
+    parser.add_argument('--wandb-project', default='sam3-neophytes')
+    parser.add_argument('--wandb-entity', help='W&B username or team; otherwise use the account default.')
+    parser.add_argument('--wandb-name', help='Optional run display name.')
+    parser.add_argument('--wandb-mode', choices=['online', 'offline'], default=None,
+                        help='Defaults to W&B settings / WANDB_MODE.')
     parser.add_argument('--check-data', action='store_true', help='Load one batch per split without downloading model weights.')
     args = parser.parse_args()
     for key in ['batch_size', 'epochs', 'image_size', 'max_proposals', 'lr', 'height_max_m']:
@@ -249,21 +275,42 @@ def main():
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
     output = resolve_path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    best = float('inf')
-    for epoch in range(1, args.epochs + 1):
-        print("got here")
-        train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
-                               height_max_m=args.height_max_m)
-        val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
-                             height_max_m=args.height_max_m)
-        print(f'Epoch {epoch:03d}/{args.epochs}: train={train_loss:.5f}, val={val_loss:.5f}')
-        checkpoint = dict(epoch=epoch, model_state_dict=model.state_dict(),
-                          optimizer_state_dict=optimizer.state_dict(), train_loss=train_loss,
-                          val_loss=val_loss, config=vars(args))
-        torch.save(checkpoint, output / 'sam3_checkpoint_last.pth')
-        if val_loss < best:
-            best = val_loss
-            torch.save(checkpoint, output / 'sam3_checkpoint_best.pth')
+    metadata = {
+        'train_dirs_resolved': [str(p) for p in train_dirs],
+        'val_dirs_resolved': [str(p) for p in val_dirs],
+        'train_tiles': len(loaders[0].dataset),
+        'val_tiles': len(loaders[1].dataset),
+        'trainable_parameters': sum(p.numel() for p in model.parameters() if p.requires_grad),
+    }
+    with wandb_session(args, output, metadata) as run:
+        best = float('inf')
+        for epoch in range(1, args.epochs + 1):
+            started = time.perf_counter()
+            train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
+                                   height_max_m=args.height_max_m)
+            val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
+                                 height_max_m=args.height_max_m)
+            print(f'Epoch {epoch:03d}/{args.epochs}: train={train_loss:.5f}, val={val_loss:.5f}')
+            checkpoint = dict(epoch=epoch, model_state_dict=model.state_dict(),
+                              optimizer_state_dict=optimizer.state_dict(), train_loss=train_loss,
+                              val_loss=val_loss, config=vars(args))
+            torch.save(checkpoint, output / 'sam3_checkpoint_last.pth')
+            improved = val_loss < best
+            if improved:
+                best = val_loss
+                torch.save(checkpoint, output / 'sam3_checkpoint_best.pth')
+            if run is not None:
+                run.log({
+                    'epoch': epoch,
+                    'train/loss': train_loss,
+                    'val/loss': val_loss,
+                    'train/learning_rate': optimizer.param_groups[0]['lr'],
+                    'val/best_loss': best,
+                    'time/epoch_seconds': time.perf_counter() - started,
+                }, step=epoch)
+                if improved:
+                    run.summary['best_epoch'] = epoch
+                    run.summary['best_val_loss'] = best
 
 
 if __name__ == '__main__':
