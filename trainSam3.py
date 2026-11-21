@@ -77,6 +77,38 @@ def dice_cce_loss(logits, targets, ignore_index=IGNORE_INDEX):
     return cce + 1 - (2 * intersection + 1e-6) / (denominator + 1e-6)
 
 
+@torch.no_grad()
+def batch_diagnostics(logits, targets, ignore_index=IGNORE_INDEX):
+    """Detached diagnostics; ignored pixels contribute to none of these metrics."""
+    keys = ['cross_entropy', 'dice_loss', 'soft_dice', 'foreground_dice',
+            'foreground_iou', 'predicted_foreground_pct', 'target_foreground_pct']
+    valid = targets != ignore_index
+    if not valid.any():
+        return dict.fromkeys(keys)
+    logits = logits.detach()
+    probability = logits.softmax(dim=1)[:, 1]
+    target_fg = (targets == 1) & valid
+    predicted_fg = (logits.argmax(dim=1) == 1) & valid
+    soft_intersection = (probability * target_fg).sum()
+    soft_denominator = (probability * valid).sum() + target_fg.sum()
+    soft_dice = (2 * soft_intersection + 1e-6) / (soft_denominator + 1e-6)
+    intersection = (predicted_fg & target_fg).sum().item()
+    predicted_count = predicted_fg.sum().item()
+    target_count = target_fg.sum().item()
+    valid_count = valid.sum().item()
+    denominator = predicted_count + target_count
+    union = denominator - intersection
+    return {
+        'cross_entropy': F.cross_entropy(logits, targets.long(), ignore_index=ignore_index).item(),
+        'dice_loss': 1 - soft_dice.item(),
+        'soft_dice': soft_dice.item(),
+        'foreground_dice': 2 * intersection / denominator if denominator else 1.0,
+        'foreground_iou': intersection / union if union else 1.0,
+        'predicted_foreground_pct': 100 * predicted_count / valid_count,
+        'target_foreground_pct': 100 * target_count / valid_count,
+    }
+
+
 class HeightAlignedTransform:
     """Resize paired height tiles to RGB resolution before joint augmentation.
 
@@ -182,9 +214,13 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
             total_samples += len(targets)
             if index % log_every == 0:
                 phase = 'Train' if training else 'Validation'
-                print(f'{phase} batch {index + 1}: loss={loss.item():.5f}', flush=True)
+                metrics = dict(loss=loss.item(), **batch_diagnostics(logits, targets))
+                fields = ' '.join(
+                    f'{key}={value:.5f}' if value is not None else f'{key}=n/a'
+                    for key, value in metrics.items())
+                print(f'{phase} batch {index + 1}: {fields}', flush=True)
                 if batch_logger is not None:
-                    batch_logger(index + 1, loss.item())
+                    batch_logger(index + 1, metrics)
     if not total_samples:
         raise ValueError('Epoch contained no valid training targets.')
     return total_loss / total_samples
@@ -231,7 +267,7 @@ def wandb_session(args, output, metadata):
                        'val/best_loss', 'time/epoch_seconds']:
             run.define_metric(metric, step_metric='epoch')
         for phase in ['train', 'val']:
-            run.define_metric(f'{phase}/batch_loss', step_metric=f'{phase}/batch')
+            run.define_metric(f'{phase}/batch_*', step_metric=f'{phase}/batch')
         yield run
 
 
@@ -319,9 +355,10 @@ def main():
             def log_batch(phase, loader):
                 if run is None:
                     return None
-                def log(index, loss):
+                def log(index, metrics):
                     run.log({f'{phase}/batch': (epoch - 1) * len(loader) + index,
-                             f'{phase}/batch_loss': loss})
+                             **{f'{phase}/batch_{key}': value for key, value in metrics.items()
+                                if value is not None}})
                 return log
             train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
                                    height_max_m=args.height_max_m,
