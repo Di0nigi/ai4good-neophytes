@@ -187,7 +187,7 @@ def main():
     if args.hf_login:
         login_to_huggingface()
     from models.sam3_model import Sam3EnsembleModel
-    from SAM.samPromptsDescriptions import speciesDict
+    from SAM.samPromptsDescriptions import speciesDictById as speciesDict
 
     model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
                               height_max_m=args.height_max_m,
