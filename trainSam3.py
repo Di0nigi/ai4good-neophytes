@@ -11,7 +11,6 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-import wandb
 
 ROOT = Path(__file__).resolve().parent
 IGNORE_INDEX = -1
@@ -252,11 +251,7 @@ def login_to_huggingface():
 
 @contextmanager
 def wandb_session(args, output, metadata):
-    """Keep W&B optional and close the run on success or training failure."""
-    if not args.wandb:
-        print('W&B disabled. Add --wandb to enable logging.', flush=True)
-        yield None
-        return
+    """Always track training and close the run on success or failure."""
     try:
         import wandb
     except ImportError as exc:
@@ -267,7 +262,8 @@ def wandb_session(args, output, metadata):
           f'mode={args.wandb_mode or os.environ.get("WANDB_MODE", "online")}', flush=True)
     with wandb.init(project=args.wandb_project, entity=args.wandb_entity,
                     name=args.wandb_name, mode=args.wandb_mode,
-                    dir=str(output), config=config) as run:
+                    dir=str(output), config=config,
+                    settings=wandb.Settings(quiet=True, show_info=False)) as run:
         mode = run.settings.mode
         print(f'W&B ready: mode={mode}, local logs={run.dir}', flush=True)
         if mode == 'online':
@@ -303,12 +299,13 @@ def main():
                         help='nDSM clipping height in metres; DSM and DTM must use metres.')
     parser.add_argument('--max-batches', type=int, help='Limit each epoch for a smoke run.')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases logging.')
+    # Retain the old flag for existing launch commands; logging is always enabled.
+    parser.add_argument('--wandb', action='store_true', default=True, help=argparse.SUPPRESS)
     parser.add_argument('--wandb-project', default='sam3-neophytes')
     parser.add_argument('--wandb-entity', help='W&B username or team; otherwise use the account default.')
     parser.add_argument('--wandb-name', help='Optional run display name.')
-    parser.add_argument('--wandb-mode', choices=['online', 'offline'], default=None,
-                        help='Defaults to W&B settings / WANDB_MODE.')
+    parser.add_argument('--wandb-mode', choices=['online', 'offline'], default='online',
+                        help='Defaults to online syncing; choose offline explicitly if needed.')
     parser.add_argument('--wandb-log-every', type=int, default=10,
                         help='Print/log batch loss every N batches, starting with the first.')
     parser.add_argument('--check-data', action='store_true', help='Load one batch per split without downloading model weights.')

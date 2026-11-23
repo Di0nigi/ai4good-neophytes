@@ -384,11 +384,11 @@ not the original tile resolution. PNGs have no geographic metadata.
 
 ### W&B logging for SAM3 training
 
-Logging is optional. Enable it with:
+Training logs to W&B online by default; no logging flag is needed:
 
 ```bash
 wandb login
-python trainSam3.py --wandb --wandb-project sam3-neophytes --wandb-name experiment-1
+python trainSam3.py --wandb-project sam3-neophytes --wandb-name experiment-1
 ```
 
 Append your usual data, device, and Hugging Face options. Use `--wandb-entity`
@@ -399,12 +399,13 @@ or checkpoints. `wandb` is already listed in `environment.yml`.
 For a compute node without internet:
 
 ```bash
-python trainSam3.py --wandb --wandb-mode offline
+python trainSam3.py --wandb-mode offline
 ```
 
 Local W&B files are stored under the chosen checkpoint output directory.
 They can be uploaded later using `wandb sync <offline-run-directory>`.
-`--wandb-mode` otherwise respects W&B settings such as `WANDB_MODE`.
+Online syncing is the default even if `WANDB_MODE` was previously set.
+Use `--wandb-mode offline` explicitly for local-only recording.
 
 Each completed epoch logs `train/loss`, `val/loss`, `train/learning_rate`,
 `val/best_loss`, and `time/epoch_seconds`. Run configuration includes CLI
@@ -412,7 +413,11 @@ settings, resolved dataset folders, split sizes, and trainable parameter count.
 The best validation loss and its epoch are also recorded in the run summary.
 The run closes on normal completion or a training exception. Model weights
 continue to be saved locally; this integration does not upload checkpoints or
-add model/gradient watching. Without `--wandb`, training does not import W&B.
+add model/gradient watching. The old `--wandb` flag is accepted for compatibility
+but no longer needed. W&B startup information is quieted; actual errors and
+warnings remain visible. `train.py` already defaults to W&B via its config and
+now uses the same quiet settings with online syncing. Its explicit `logger=csv`
+override remains available.
 `--check-data` does not start a W&B run.
 
 W&B starts before pretrained model loading, and the terminal prints the effective
@@ -420,5 +425,4 @@ mode, local log directory, and online run URL. Training prints stage transitions
 and batch losses with flushed output. Batch loss is logged from the first batch,
 then every `--wandb-log-every` batches (default 10); use 1 to log every batch.
 Batch and epoch charts have separate step axes. Epoch aggregate metrics still
-appear only after training and validation complete. If logging is not enabled,
-the script explicitly prints that `--wandb` is required.
+appear only after training and validation complete.
