@@ -180,7 +180,7 @@ def prepare_height_maps(ndsm, images, height_max_m):
 
 
 def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0,
-              batch_logger=None, log_every=10):
+              batch_logger=None, log_every=500):
     training = optimizer is not None
     model.train(training)
     model.sam_model.eval() 
@@ -190,8 +190,6 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
         for index, batch in enumerate(loader):
             if max_batches is not None and index >= max_batches:
                 break
-
-            
             images = batch['image']                        
             masks  = batch['mask'].long()                  
             masks[(masks == 254) | (masks == 255)] = IGNORE_INDEX
