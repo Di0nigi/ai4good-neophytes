@@ -176,51 +176,56 @@ class MaskClassifierResnet(nn.Module):
 class MaskClassifierMobileNet(nn.Module):
     def __init__(self, num_classes, max_masks=8):
         super().__init__()
-
         self.max_masks = max_masks
 
         weights = models.MobileNet_V2_Weights.IMAGENET1K_V1
         backbone = models.mobilenet_v2(weights=weights)
-
-        # ---- discover stage boundaries from the actual backbone ----
-        # Probe features with a dummy input, record (out_channels, stride_so_far)
-        # after each block, and split into 4 stages at stride 4, 8, 16, 32.
-        dummy = torch.zeros(1, 3, 64, 64)
         feats = backbone.features
-        stage_end = {}       # stride -> last block index in that stage
-        ch_at = {}           # stride -> channel count at that stage
+
+        # ---------- probe the real backbone ----------
+        # Run a dummy input through and record, for every block:
+        #   stride_after_block (relative to input) and channels_after_block
+        # Then pick the LAST block at each of strides 4, 8, 16, 32.
+        H = W = 64
         with torch.no_grad():
-            x = dummy
-            s = 1
-            for idx, block in enumerate(feats):
+            x = torch.zeros(1, 3, H, W)
+            strides, chans = [], []
+            for block in feats:
                 x = block(x)
-                # Infer stride from spatial size, robust to internal stride layout
-                s = dummy.shape[-1] // x.shape[-1]
-                if s in (4, 8, 16, 32) and s not in stage_end:
-                    stage_end[s] = idx
-                    ch_at[s]    = x.shape[1]
+                strides.append(H // x.shape[-2])
+                chans.append(x.shape[1])
 
-        if set(stage_end) != {4, 8, 16, 32}:
-            raise RuntimeError(
-                f"MobileNetV2 stage discovery failed: got stride→idx {stage_end}. "
-                "Your torchvision MobileNetV2 layout differs from the expected one."
-            )
+        # Map each of the four target strides to the last block achieving it
+        # (and verify it strictly increases).
+        boundaries = {}
+        for target in (4, 8, 16, 32):
+            idxs = [i for i, s in enumerate(strides) if s == target]
+            if not idxs:
+                raise RuntimeError(
+                    f"MobileNetV2 never reaches stride {target}; "
+                    f"per-block strides were {strides}"
+                )
+            boundaries[target] = idxs[-1]
 
-        # Build the 4 stages as nn.Sequential slices (inclusive of the stage's last block).
-        # stage at stride 4  → blocks [1 .. stage_end[4]]      (skip stem at index 0)
-        # stage at stride 8  → blocks [stage_end[4]+1 .. stage_end[8]]
-        # etc.
-        starts = {4: 1, 8: stage_end[4] + 1, 16: stage_end[8] + 1, 32: stage_end[16] + 1}
-        self.stem   = feats[0]                                # stride 2, 32 ch
-        self.layer1 = feats[starts[4]  : stage_end[4]  + 1]   # stride 4
-        self.layer2 = feats[starts[8]  : stage_end[8]  + 1]   # stride 8
-        self.layer3 = feats[starts[16] : stage_end[16] + 1]   # stride 16
-        self.layer4 = feats[starts[32] : ]                    # stride 32 (last)
+        # Validate that boundaries are strictly increasing
+        bs = [boundaries[4], boundaries[8], boundaries[16], boundaries[32]]
+        if not all(a < b for a, b in zip(bs, bs[1:])):
+            raise RuntimeError(f"Non-monotonic stage boundaries: {boundaries}")
 
-        # Channel counts derived from the probe — use these, not constants.
-        c1 = ch_at[4];  c2 = ch_at[8];  c3 = ch_at[16];  c4 = ch_at[32]
+   
+        first_stride4_block = next(i for i, s in enumerate(strides) if s == 4)
+        stem_end = first_stride4_block           # exclusive
+        self.stem = feats[:stem_end] if stem_end > 0 else nn.Identity()
 
-        # Encode ALL SAM masks together
+        s4, s8, s16, s32 = bs
+        self.layer1 = feats[stem_end  : s4 + 1]  # through stride 4
+        self.layer2 = feats[s4 + 1    : s8 + 1]  # through stride 8
+        self.layer3 = feats[s8 + 1    : s16 + 1] # through stride 16
+        self.layer4 = feats[s16 + 1   : s32 + 1] # through stride 32
+
+        c1 = chans[s4]; c2 = chans[s8]; c3 = chans[s16]; c4 = chans[s32]
+
+        # ---------- rest of the model ----------
         self.mask_encoder = nn.Sequential(
             nn.Conv2d(max_masks, 64, kernel_size=3, padding=1),
             nn.BatchNorm2d(64), nn.ReLU(inplace=True),
@@ -228,7 +233,6 @@ class MaskClassifierMobileNet(nn.Module):
             nn.BatchNorm2d(32), nn.ReLU(inplace=True),
         )
 
-        # Decoder — built from discovered channel counts
         self.decode3 = nn.Sequential(
             nn.Conv2d(c4 + c3, 256, 3, padding=1),
             nn.BatchNorm2d(256), nn.ReLU(inplace=True),
@@ -251,11 +255,10 @@ class MaskClassifierMobileNet(nn.Module):
             nn.Conv2d(64, num_classes, kernel_size=1),
         )
 
-        # For your debugging — printed once
-        print(f"[MaskClassifierMobileNet] stage channels: "
-              f"stem={x.shape[1]} c1={c1} c2={c2} c3={c3} c4={c4}  "
-              f"ends={stage_end}")
-
+        print(
+            f"[MaskClassifierMobileNet] stages: stem=feats[:{stem_end}], "
+            f"c1={c1}@idx{s4}, c2={c2}@idx{s8}, c3={c3}@idx{s16}, c4={c4}@idx{s32}"
+        )
     def forward(self, images, sam_masks):
         """
         images:   [B, 3, H, W]
