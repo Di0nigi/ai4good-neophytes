@@ -182,56 +182,79 @@ class MaskClassifierMobileNet(nn.Module):
         weights = models.MobileNet_V2_Weights.IMAGENET1K_V1
         backbone = models.mobilenet_v2(weights=weights)
 
-        # MobileNetV2 encoder
-        # features indices: 0=stem, 1..3 → stride 4 (24ch), 4..6 → stride 8 (32ch),
-        # 7..13 → stride 16 (96ch), 14..17 → stride 32 (320ch)
-        self.stem   = backbone.features[0]            # H/2,   16
-        self.layer1 = backbone.features[1:4]          # H/4,   24
-        self.layer2 = backbone.features[4:7]          # H/8,   32
-        self.layer3 = backbone.features[7:14]         # H/16,  96
-        self.layer4 = backbone.features[14:]          # H/32, 320
+        # ---- discover stage boundaries from the actual backbone ----
+        # Probe features with a dummy input, record (out_channels, stride_so_far)
+        # after each block, and split into 4 stages at stride 4, 8, 16, 32.
+        dummy = torch.zeros(1, 3, 64, 64)
+        feats = backbone.features
+        stage_end = {}       # stride -> last block index in that stage
+        ch_at = {}           # stride -> channel count at that stage
+        with torch.no_grad():
+            x = dummy
+            s = 1
+            for idx, block in enumerate(feats):
+                x = block(x)
+                # Infer stride from spatial size, robust to internal stride layout
+                s = dummy.shape[-1] // x.shape[-1]
+                if s in (4, 8, 16, 32) and s not in stage_end:
+                    stage_end[s] = idx
+                    ch_at[s]    = x.shape[1]
+
+        if set(stage_end) != {4, 8, 16, 32}:
+            raise RuntimeError(
+                f"MobileNetV2 stage discovery failed: got stride→idx {stage_end}. "
+                "Your torchvision MobileNetV2 layout differs from the expected one."
+            )
+
+        # Build the 4 stages as nn.Sequential slices (inclusive of the stage's last block).
+        # stage at stride 4  → blocks [1 .. stage_end[4]]      (skip stem at index 0)
+        # stage at stride 8  → blocks [stage_end[4]+1 .. stage_end[8]]
+        # etc.
+        starts = {4: 1, 8: stage_end[4] + 1, 16: stage_end[8] + 1, 32: stage_end[16] + 1}
+        self.stem   = feats[0]                                # stride 2, 32 ch
+        self.layer1 = feats[starts[4]  : stage_end[4]  + 1]   # stride 4
+        self.layer2 = feats[starts[8]  : stage_end[8]  + 1]   # stride 8
+        self.layer3 = feats[starts[16] : stage_end[16] + 1]   # stride 16
+        self.layer4 = feats[starts[32] : ]                    # stride 32 (last)
+
+        # Channel counts derived from the probe — use these, not constants.
+        c1 = ch_at[4];  c2 = ch_at[8];  c3 = ch_at[16];  c4 = ch_at[32]
 
         # Encode ALL SAM masks together
         self.mask_encoder = nn.Sequential(
             nn.Conv2d(max_masks, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-
+            nn.BatchNorm2d(64), nn.ReLU(inplace=True),
             nn.Conv2d(64, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True)
+            nn.BatchNorm2d(32), nn.ReLU(inplace=True),
         )
 
-        # Decoder
+        # Decoder — built from discovered channel counts
         self.decode3 = nn.Sequential(
-            nn.Conv2d(320 + 96, 256, 3, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(c4 + c3, 256, 3, padding=1),
+            nn.BatchNorm2d(256), nn.ReLU(inplace=True),
         )
-
         self.decode2 = nn.Sequential(
-            nn.Conv2d(256 + 32, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(256 + c2, 128, 3, padding=1),
+            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
         )
-
         self.decode1 = nn.Sequential(
-            nn.Conv2d(128 + 24, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True)
+            nn.Conv2d(128 + c1, 128, 3, padding=1),
+            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
         )
-
         self.fusion = nn.Sequential(
             nn.Conv2d(128 + 32, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True)
+            nn.BatchNorm2d(128), nn.ReLU(inplace=True),
         )
-
         self.segmentation_head = nn.Sequential(
             nn.Conv2d(128, 64, 3, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, num_classes, kernel_size=1)
+            nn.Conv2d(64, num_classes, kernel_size=1),
         )
+
+        # For your debugging — printed once
+        print(f"[MaskClassifierMobileNet] stage channels: "
+              f"stem={x.shape[1]} c1={c1} c2={c2} c3={c3} c4={c4}  "
+              f"ends={stage_end}")
 
     def forward(self, images, sam_masks):
         """
