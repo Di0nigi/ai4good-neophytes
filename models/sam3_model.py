@@ -346,13 +346,24 @@ class PromptGeneratorSam(nn.Module):
         #tokens = self.tokenizer(textPrompt).to(enhancedIm.device)
         #tEmb = self.clipModel.encode_text(tokens)
         #tEmb = tEmb / tEmb.norm(dim=-1, keepdim=True)
-        if textPrompt not in self._text_cache:
+        
+        prompts = textPrompt if isinstance(textPrompt, (list, tuple)) else [textPrompt]
+        prompts = list(prompts)                                 
+        missing = [p for p in dict.fromkeys(prompts) if p not in self._text_cache]
+        if missing:
             with torch.no_grad():
-                tokens = self.tokenizer(textPrompt).to(enhancedIm.device)
-                tEmb = self.clipModel.encode_text(tokens)
-                tEmb = tEmb / tEmb.norm(dim=-1, keepdim=True)
-                self._text_cache[textPrompt] = tEmb.detach()
-        tEmb = self._text_cache[textPrompt]
+                tokens = self.tokenizer(missing).to(enhancedIm.device)
+                t = self.clipModel.encode_text(tokens)
+                t = t / t.norm(dim=-1, keepdim=True)
+                for p, emb in zip(missing, t):
+                    self._text_cache[p] = emb.detach()
+
+        tEmb = torch.stack([self._text_cache[p] for p in prompts], dim=0)
+        if tEmb.device != enhancedIm.device:
+            tEmb = tEmb.to(enhancedIm.device)
+
+
+
         embedding = torch.stack([hEmb, imgEmb, tEmb],dim=1)
         #projected = self.projector(embedding)
         outTensor = embedding
