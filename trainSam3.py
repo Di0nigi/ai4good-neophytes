@@ -4,6 +4,8 @@ import getpass
 import json
 import math
 import os
+import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -76,6 +78,38 @@ def dice_cce_loss(logits, targets, ignore_index=IGNORE_INDEX):
     return cce + 1 - (2 * intersection + 1e-6) / (denominator + 1e-6)
 
 
+@torch.no_grad()
+def batch_diagnostics(logits, targets, ignore_index=IGNORE_INDEX):
+    """Detached diagnostics; ignored pixels contribute to none of these metrics."""
+    keys = ['cross_entropy', 'dice_loss', 'soft_dice', 'foreground_dice',
+            'foreground_iou', 'predicted_foreground_pct', 'target_foreground_pct']
+    valid = targets != ignore_index
+    if not valid.any():
+        return dict.fromkeys(keys)
+    logits = logits.detach()
+    probability = logits.softmax(dim=1)[:, 1]
+    target_fg = (targets == 1) & valid
+    predicted_fg = (logits.argmax(dim=1) == 1) & valid
+    soft_intersection = (probability * target_fg).sum()
+    soft_denominator = (probability * valid).sum() + target_fg.sum()
+    soft_dice = (2 * soft_intersection + 1e-6) / (soft_denominator + 1e-6)
+    intersection = (predicted_fg & target_fg).sum().item()
+    predicted_count = predicted_fg.sum().item()
+    target_count = target_fg.sum().item()
+    valid_count = valid.sum().item()
+    denominator = predicted_count + target_count
+    union = denominator - intersection
+    return {
+        'cross_entropy': F.cross_entropy(logits, targets.long(), ignore_index=ignore_index).item(),
+        'dice_loss': 1 - soft_dice.item(),
+        'soft_dice': soft_dice.item(),
+        'foreground_dice': 2 * intersection / denominator if denominator else 1.0,
+        'foreground_iou': intersection / union if union else 1.0,
+        'predicted_foreground_pct': 100 * predicted_count / valid_count,
+        'target_foreground_pct': 100 * target_count / valid_count,
+    }
+
+
 class HeightAlignedTransform:
     """Resize paired height tiles to RGB resolution before joint augmentation.
 
@@ -145,7 +179,8 @@ def prepare_height_maps(ndsm, images, height_max_m):
     return (heights.clamp(0, height_max_m) / height_max_m).repeat(1, 3, 1, 1)
 
 
-def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0):
+def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0,
+              batch_logger=None, log_every=10):
     training = optimizer is not None
     model.train(training)
     model.sam_model.eval() 
@@ -189,6 +224,15 @@ def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_ma
                 optimizer.step()
             total_loss += loss.item() * len(targets)
             total_samples += len(targets)
+            if index % log_every == 0:
+                phase = 'Train' if training else 'Validation'
+                metrics = dict(loss=loss.item(), **batch_diagnostics(logits, targets))
+                fields = ' '.join(
+                    f'{key}={value:.5f}' if value is not None else f'{key}=n/a'
+                    for key, value in metrics.items())
+                print(f'{phase} batch {index + 1}: {fields}', flush=True)
+                if batch_logger is not None:
+                    batch_logger(index + 1, metrics)
     if not total_samples:
         raise ValueError('Epoch contained no valid training targets.')
     return total_loss / total_samples
@@ -204,6 +248,39 @@ def login_to_huggingface():
     login(token=token, add_to_git_credential=False)
     # HF_TOKEN overrides cached credentials; use the entered token for this run.
     os.environ['HF_TOKEN'] = token
+
+
+@contextmanager
+def wandb_session(args, output, metadata):
+    """Keep W&B optional and close the run on success or training failure."""
+    if not args.wandb:
+        print('W&B disabled. Add --wandb to enable logging.', flush=True)
+        yield None
+        return
+    try:
+        import wandb
+    except ImportError as exc:
+        raise RuntimeError('W&B logging requires wandb: pip install wandb') from exc
+    # Only CLI settings and explicit metadata are logged, never environment tokens.
+    config = dict(vars(args), **metadata)
+    print(f'Initializing W&B: project={args.wandb_project}, '
+          f'mode={args.wandb_mode or os.environ.get("WANDB_MODE", "online")}', flush=True)
+    with wandb.init(project=args.wandb_project, entity=args.wandb_entity,
+                    name=args.wandb_name, mode=args.wandb_mode,
+                    dir=str(output), config=config) as run:
+        mode = run.settings.mode
+        print(f'W&B ready: mode={mode}, local logs={run.dir}', flush=True)
+        if mode == 'online':
+            print(f'W&B run: {run.url}', flush=True)
+        else:
+            print('W&B is not online; this run will not update the live dashboard.', flush=True)
+        run.define_metric('epoch')
+        for metric in ['train/loss', 'val/loss', 'train/learning_rate',
+                       'val/best_loss', 'time/epoch_seconds']:
+            run.define_metric(metric, step_metric='epoch')
+        for phase in ['train', 'val']:
+            run.define_metric(f'{phase}/batch_*', step_metric=f'{phase}/batch')
+        yield run
 
 
 def main():
@@ -226,6 +303,14 @@ def main():
                         help='nDSM clipping height in metres; DSM and DTM must use metres.')
     parser.add_argument('--max-batches', type=int, help='Limit each epoch for a smoke run.')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--wandb', action='store_true', help='Enable Weights & Biases logging.')
+    parser.add_argument('--wandb-project', default='sam3-neophytes')
+    parser.add_argument('--wandb-entity', help='W&B username or team; otherwise use the account default.')
+    parser.add_argument('--wandb-name', help='Optional run display name.')
+    parser.add_argument('--wandb-mode', choices=['online', 'offline'], default=None,
+                        help='Defaults to W&B settings / WANDB_MODE.')
+    parser.add_argument('--wandb-log-every', type=int, default=10,
+                        help='Print/log batch loss every N batches, starting with the first.')
     parser.add_argument('--check-data', action='store_true', help='Load one batch per split without downloading model weights.')
     args = parser.parse_args()
     for key in ['batch_size', 'epochs', 'image_size', 'max_proposals', 'lr', 'height_max_m']:
@@ -233,6 +318,8 @@ def main():
             parser.error(f'{key} must be finite and positive')
     if args.num_workers < 0 or (args.max_batches is not None and args.max_batches <= 0):
         parser.error('num-workers must be nonnegative and max-batches must be positive')
+    if args.wandb_log_every <= 0:
+        parser.error('wandb-log-every must be positive')
     torch.manual_seed(args.seed)
     train_dirs, val_dirs = get_dirs(args)
     loaders = []
@@ -253,29 +340,68 @@ def main():
         return
     if args.hf_login:
         login_to_huggingface()
-    from models.sam3_model import Sam3EnsembleModel
-    device = torch.device(args.device)
-    model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
-                              max_proposals=args.max_proposals, ignore_index=IGNORE_INDEX,
-                              height_max_m=args.height_max_m).to(device)
-    optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
     output = resolve_path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
-    best = float('inf')
-    for epoch in range(1, args.epochs + 1):
-        print("got here")
-        train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
-                               height_max_m=args.height_max_m)
-        val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
-                             height_max_m=args.height_max_m)
-        print(f'Epoch {epoch:03d}/{args.epochs}: train={train_loss:.5f}, val={val_loss:.5f}')
-        checkpoint = dict(epoch=epoch, model_state_dict=model.state_dict(),
-                          optimizer_state_dict=optimizer.state_dict(), train_loss=train_loss,
-                          val_loss=val_loss, config=vars(args))
-        torch.save(checkpoint, output / 'sam3_checkpoint_last.pth')
-        if val_loss < best:
-            best = val_loss
-            torch.save(checkpoint, output / 'sam3_checkpoint_best.pth')
+    metadata = {
+        'train_dirs_resolved': [str(p) for p in train_dirs],
+        'val_dirs_resolved': [str(p) for p in val_dirs],
+        'train_tiles': len(loaders[0].dataset),
+        'val_tiles': len(loaders[1].dataset),
+    }
+    with wandb_session(args, output, metadata) as run:
+        print('Loading SAM3 ensemble and pretrained weights...', flush=True)
+        from models.sam3_model import Sam3EnsembleModel
+        device = torch.device(args.device)
+        model = Sam3EnsembleModel(num_classes=2, sam_checkpoint=args.sam_checkpoint,
+                                  max_proposals=args.max_proposals, ignore_index=IGNORE_INDEX,
+                                  height_max_m=args.height_max_m).to(device)
+        optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=args.lr)
+        if run is not None:
+            run.config.update({'trainable_parameters': sum(
+                p.numel() for p in model.parameters() if p.requires_grad)})
+        print('Model ready; starting training.', flush=True)
+        best = float('inf')
+        for epoch in range(1, args.epochs + 1):
+            started = time.perf_counter()
+            print(f'Epoch {epoch}/{args.epochs}: training...', flush=True)
+            def log_batch(phase, loader):
+                if run is None:
+                    return None
+                def log(index, metrics):
+                    run.log({f'{phase}/batch': (epoch - 1) * len(loader) + index,
+                             **{f'{phase}/batch_{key}': value for key, value in metrics.items()
+                                if value is not None}})
+                return log
+            train_loss = run_epoch(model, loaders[0], device, optimizer, args.max_batches,
+                                   height_max_m=args.height_max_m,
+                                   batch_logger=log_batch('train', loaders[0]),
+                                   log_every=args.wandb_log_every)
+            print(f'Epoch {epoch}/{args.epochs}: validating...', flush=True)
+            val_loss = run_epoch(model, loaders[1], device, max_batches=args.max_batches,
+                                 height_max_m=args.height_max_m,
+                                 batch_logger=log_batch('val', loaders[1]),
+                                 log_every=args.wandb_log_every)
+            print(f'Epoch {epoch:03d}/{args.epochs}: train={train_loss:.5f}, val={val_loss:.5f}')
+            checkpoint = dict(epoch=epoch, model_state_dict=model.state_dict(),
+                              optimizer_state_dict=optimizer.state_dict(), train_loss=train_loss,
+                              val_loss=val_loss, config=vars(args))
+            torch.save(checkpoint, output / 'sam3_checkpoint_last.pth')
+            improved = val_loss < best
+            if improved:
+                best = val_loss
+                torch.save(checkpoint, output / 'sam3_checkpoint_best.pth')
+            if run is not None:
+                run.log({
+                    'epoch': epoch,
+                    'train/loss': train_loss,
+                    'val/loss': val_loss,
+                    'train/learning_rate': optimizer.param_groups[0]['lr'],
+                    'val/best_loss': best,
+                    'time/epoch_seconds': time.perf_counter() - started,
+                })
+                if improved:
+                    run.summary['best_epoch'] = epoch
+                    run.summary['best_val_loss'] = best
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ import open_clip
 
 from transformers import Sam3Model, Sam3Processor
 from transformers.modeling_outputs import BaseModelOutputWithPooling
-from SAM.samPromptsDescriptions import speciesDict
+from SAM.samPromptsDescriptions import speciesDictById as speciesDict
 
 
 
@@ -458,6 +458,13 @@ class Sam3EnsembleModel(nn.Module):
             ]
 
             if not candidates:
+                dup_imgs.append(images[i])
+                dup_heightmaps.append(height_maps[i])
+                background_mask = torch.zeros_like(m)
+                background_mask[m == self.ignore_index] = self.ignore_index
+                dup_masks.append(background_mask)
+                dup_texts.append("background")
+                dup_labels.append(0)
                 continue
 
             for lab in candidates:
@@ -473,18 +480,6 @@ class Sam3EnsembleModel(nn.Module):
 
                 dup_texts.append(speciesDict[lab])
                 dup_labels.append(lab)
-
-        if not candidates:
-            
-            dup_imgs.append(images[i])
-            dup_heightmaps.append(height_maps[i])
-
-            background_mask = torch.zeros_like(m)
-            background_mask[m == self.ignore_index] = self.ignore_index
-            dup_masks.append(background_mask)
-
-            dup_texts.append("background")
-            dup_labels.append(0)
 
         enhancedIm = torch.stack(dup_imgs)
         heightMap = torch.stack(dup_heightmaps)
