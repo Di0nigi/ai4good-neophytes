@@ -304,7 +304,7 @@ def main():
     parser.add_argument('--wandb-name', help='Optional run display name.')
     parser.add_argument('--wandb-mode', choices=['online', 'offline'], default='online',
                         help='Defaults to online syncing; choose offline explicitly if needed.')
-    parser.add_argument('--wandb-log-every', type=int, default=10,
+    parser.add_argument('--wandb-log-every', type=int, default=400,
                         help='Print/log batch loss every N batches, starting with the first.')
     parser.add_argument('--check-data', action='store_true', help='Load one batch per split without downloading model weights.')
     args = parser.parse_args()
