@@ -227,6 +227,14 @@ configs/
   model/   architectures, inputs, loss, schedule
 ```
 
+### PlantNet ViT-B crop-classification experiment
+
+The separate [PlantNet ViT-B experiment](experiments/plantnet-vitb/README.md)
+compares the unchanged Hugging Face classifier with fine-tuned and tile-balanced
+variants using site-grouped cross-validation. It assigns one class per crop;
+it does not generate pixel-level segmentation masks. Its scripts, environment
+file, run commands, and privacy notes are documented in that folder.
+
 ---
 
 ## 7. Configuration with Hydra
