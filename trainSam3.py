@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
+import wandb
 
 ROOT = Path(__file__).resolve().parent
 IGNORE_INDEX = -1
@@ -147,23 +148,34 @@ def prepare_height_maps(ndsm, images, height_max_m):
 def run_epoch(model, loader, device, optimizer=None, max_batches=None, height_max_m=10.0):
     training = optimizer is not None
     model.train(training)
-    model.sam_model.eval()  # model.train() also switches the frozen SAM backbone.
+    model.sam_model.eval() 
+    model.prompt_generator.clipModel.eval() 
     total_loss, total_samples = 0.0, 0
     with torch.set_grad_enabled(training):
         for index, batch in enumerate(loader):
             if max_batches is not None and index >= max_batches:
                 break
-            images = batch['image'].to(device)
-            masks = batch['mask'].to(device).long()
+
+            
+            images = batch['image']                        
+            masks  = batch['mask'].long()                  
             masks[(masks == 254) | (masks == 255)] = IGNORE_INDEX
+
             if not (((masks >= 0) & (masks <= 6)) | (masks == IGNORE_INDEX)).all():
                 raise ValueError('Masks must contain class IDs 0–6, 254, 255, or -1.')
             if not (masks != IGNORE_INDEX).any():
                 continue
-            height_maps = prepare_height_maps(batch['ndsm'], images, height_max_m)
+            
+            height_maps = prepare_height_maps(batch['ndsm'], images, height_max_m)  
+
+
             enhanced, heights, texts, labels, targets = model.prepare_inputs(
                 images, masks, height_maps=height_maps)
-            expected = sum(max(1, len(torch.unique(m[(m > 0) & (m <= 6)]))) for m in masks)
+
+            enhanced = enhanced.to(device, non_blocking=True)
+            heights  = heights.to(device, non_blocking=True)
+            targets  = targets.to(device, non_blocking=True)
+
             if training:
                 optimizer.zero_grad(set_to_none=True)
             logits = model(enhanced, texts, heights)
@@ -207,7 +219,7 @@ def main():
     parser.add_argument('--batch-size', type=int, default=1)
     parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--num-workers', type=int, default=0)
+    parser.add_argument('--num-workers', type=int, default=2)
     parser.add_argument('--image-size', type=int, default=1008)
     parser.add_argument('--max-proposals', type=int, default=32)
     parser.add_argument('--height-max-m', type=float, default=10.0,
