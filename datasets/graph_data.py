@@ -452,6 +452,7 @@ class NeophyteGraphDataModule(NeophyteDataModule):
         self.graph_kwargs = graph_kwargs or {}
         self.graph_cache_dir = Path(graph_cache_dir) if graph_cache_dir else None
         self.graph_cache_train = graph_cache_train
+        self.graph_kdtree_radius = graph_kdtree_radius
         self.graph_use_phenology = graph_use_phenology
 
     def _make_graph_dataset(
