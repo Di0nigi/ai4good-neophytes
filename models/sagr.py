@@ -70,6 +70,7 @@ class HybridResNet18GNN(pl.LightningModule):
         prediction_node_label_propagation_args: dict | None = None,
     ):
         super(HybridResNet18GNN, self).__init__()
+        self.save_hyperparameters(ignore=["class_weights"])
         self.lr = lr
         if prediction_node_label_propagation_args is None:
             self.prediction_node_label_propagation_args = {
