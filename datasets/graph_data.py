@@ -1,4 +1,3 @@
-# graph_data.py
 from __future__ import annotations
 
 import hashlib
@@ -114,7 +113,7 @@ def make_node_labels(mask, segments, class_to_id, min_labeled_fraction=0.25):
 
     safe = np.clip(mask, 0, lut.shape[0] - 1)
     mapped = lut[safe]
-    mapped[(mask < 0) | (mask >= lut.shape[0])] = -1   # ignore + unknown values
+    mapped[(mask < 0) | (mask >= lut.shape[0])] = -1  # ignore + unknown values
 
     seg = segments.ravel()
     ok = mapped.ravel() >= 0
@@ -127,6 +126,31 @@ def make_node_labels(mask, segments, class_to_id, min_labeled_fraction=0.25):
     frac = labeled / np.maximum(total, 1)
     labels = np.where(frac >= min_labeled_fraction, counts.argmax(axis=1), -1)
     return labels.astype(np.int64)
+
+
+def make_node_phenology(mask, phenology, segments, num_classes, num_stages: int = 3):
+    """One-hot of the dominant phenology stage per node over its target-class pixels.
+
+    mask: (H, W) class ids, 0 = background
+    phenology: (H, W) stage ids 1..num_stages (band 3 of the mask raster)
+    """
+    num_nodes = int(segments.max()) + 1
+    one_hot_encoded_phenology = np.zeros((num_nodes, num_stages), dtype=np.float32)
+
+    found_phenology = (
+        (mask > 0) & (mask < num_classes) & (phenology > 0) & (phenology <= num_stages)
+    )
+    if not found_phenology.any():
+        return one_hot_encoded_phenology
+
+    counts = np.bincount(
+        segments[found_phenology] * num_stages + (phenology[found_phenology] - 1),
+        minlength=num_nodes * num_stages,
+    ).reshape(num_nodes, num_stages)
+    dominant = counts.argmax(axis=1)
+    has_stage = counts.sum(axis=1) > 0
+    one_hot_encoded_phenology[has_stage, dominant[has_stage]] = 1.0
+    return one_hot_encoded_phenology
 
 
 def make_adjacency(segments):
@@ -189,8 +213,6 @@ def _image_hwc(value):
 
     if image.ndim != 3:
         raise ValueError(f"Expected a 3-D image, got shape {image.shape}.")
-
-    # ToTensorV2 commonly returns CHW; the dataset may also return HWC.
     if image.shape[0] in (1, 3, 4) and image.shape[-1] not in (1, 3, 4):
         image = np.moveaxis(image, 0, -1)
 
@@ -231,6 +253,7 @@ class NeophyteGraphDataset(NeophyteDataset):
         graph_kwargs=None,
         graph_cache_dir=None,
         graph_kdtree_radius: int = 0,
+        graph_use_phenology: bool = True,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -242,6 +265,7 @@ class NeophyteGraphDataset(NeophyteDataset):
         )
         self.graph_kwargs = graph_kwargs or {}
         self.graph_kdtree_radius = graph_kdtree_radius
+        self.graph_use_phenology = graph_use_phenology
         self.graph_cache_dir = Path(graph_cache_dir) if graph_cache_dir else None
         if self.graph_cache_dir:
             self.graph_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -255,12 +279,15 @@ class NeophyteGraphDataset(NeophyteDataset):
         file_info = []
         for f in files:
             st = os.stat(f)
-            file_info.append({"path": str(f), "mtime_ns": st.st_mtime_ns, "size": st.st_size})
+            file_info.append(
+                {"path": str(f), "mtime_ns": st.st_mtime_ns, "size": st.st_size}
+            )
         key_data = {
             "version": GRAPH_CACHE_VERSION,
             "files": file_info,
             "classes": self.graph_class_values,
             "graph_kwargs": self.graph_kwargs,
+            "graph_kdtree_radius": self.graph_kdtree_radius,
             "value_mapping": str(self.value_mapping),
             "ignore_index": self.ignore_index,
             "load_auxiliary": self.load_auxiliary,
@@ -271,7 +298,11 @@ class NeophyteGraphDataset(NeophyteDataset):
             "dsm_transform": repr(self.dsm_transform),
             "ndsm_transform": repr(self.ndsm_transform),
         }
-        key = hashlib.sha1(json.dumps(key_data, sort_keys=True, default=str).encode()).hexdigest()
+        if self.graph_use_phenology:
+            key_data["graph_use_phenology"] = True
+        key = hashlib.sha1(
+            json.dumps(key_data, sort_keys=True, default=str).encode()
+        ).hexdigest()
         return self.graph_cache_dir / f"{key}.pt"
 
     def __getitem__(self, idx):
@@ -289,8 +320,8 @@ class NeophyteGraphDataset(NeophyteDataset):
 
         return graph
 
-    def _build_graph(self, idx):
-        sample = super().__getitem__(idx)
+    def _unpack_sample(self, sample, idx):
+        """Image (HWC), mask (HW) and extra rasters from a parent sample."""
         image = _image_hwc(sample["image"])
         mask = _as_numpy(sample["mask"]).astype(np.int64, copy=False)
 
@@ -317,6 +348,23 @@ class NeophyteGraphDataset(NeophyteDataset):
                     )
                 extra_rasters.append(raster)
 
+        phenology = None
+        if self.graph_use_phenology:
+            if "phenology" not in sample:
+                raise ValueError(
+                    "graph_use_phenology needs the phenology band: set "
+                    "data.load_auxiliary=True."
+                )
+            phenology = _raster_hw(sample["phenology"]).astype(np.int64, copy=False)
+            if phenology.shape != mask.shape:
+                raise ValueError(
+                    f"phenology shape {phenology.shape} does not match mask "
+                    f"shape {mask.shape} for {sample.get('name', idx)}."
+                )
+
+        return image, mask, extra_rasters, phenology
+
+    def _make_segments(self, image, shape):
         segments = felzenszwalb(
             image,
             scale=self.graph_kwargs.get("felz_scale", 100),
@@ -327,9 +375,19 @@ class NeophyteGraphDataset(NeophyteDataset):
 
         # Ensure node IDs are exactly 0 ... N-1.
         _, segments = np.unique(segments, return_inverse=True)
-        segments = segments.reshape(mask.shape).astype(np.int64)
+        return segments.reshape(shape).astype(np.int64)
+
+    def _build_graph(self, idx):
+        sample = super().__getitem__(idx)
+        image, mask, extra_rasters, phenology = self._unpack_sample(sample, idx)
+        segments = self._make_segments(image, mask.shape)
 
         x = extract_node_features(image, segments, extra_rasters)
+        if phenology is not None:
+            x = np.concatenate(
+                [x, make_node_phenology(mask, phenology, segments, self.num_classes)],
+                axis=1,
+            )
         y = make_node_labels(
             mask,
             segments,
@@ -339,13 +397,42 @@ class NeophyteGraphDataset(NeophyteDataset):
         if self.graph_kdtree_radius > 0:
             edge_index = make_adjacency_kdtree(segments, self.graph_kdtree_radius)
         else:
-            edge_index =make_adjacency(segments)
+            edge_index = make_adjacency(segments)
         return Data(
             x=torch.from_numpy(x),
             edge_index=edge_index,
             y=torch.from_numpy(y),
             num_nodes=x.shape[0],
         )
+
+    def get_visualization_sample(self, idx):
+        """One tile as image, mask, Felzenszwalb segments and its PyG graph.
+
+        For drawing qualitative figures: unlike ``__getitem__`` it also
+        exposes the pixels behind the nodes. The segmentation is rebuilt
+        with the same parameters as ``_build_graph``, so its node IDs line
+        up with the (possibly cached) graph.
+        """
+        sample = super().__getitem__(idx)
+        image, mask, _, _ = self._unpack_sample(sample, idx)
+        segments = self._make_segments(image, mask.shape)
+
+        graph = self[idx]  # uses the graph cache when present
+
+        if graph.num_nodes != int(segments.max()) + 1:
+            raise RuntimeError(
+                f"Graph for {sample.get('name', idx)} has {graph.num_nodes} nodes "
+                f"but the current segmentation yields {int(segments.max()) + 1} "
+                "segments. Delete the graph cache and rerun."
+            )
+
+        return {
+            "image": image,
+            "mask": mask,
+            "segments": segments,
+            "graph": graph,
+            "name": sample.get("name", str(idx)),
+        }
 
 
 class NeophyteGraphDataModule(NeophyteDataModule):
@@ -357,17 +444,19 @@ class NeophyteGraphDataModule(NeophyteDataModule):
         graph_cache_dir=None,
         graph_cache_train=False,
         graph_kdtree_radius: int = 0,
+        graph_use_phenology: bool = False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.graph_class_values = graph_class_values
         self.graph_kwargs = graph_kwargs or {}
         self.graph_cache_dir = Path(graph_cache_dir) if graph_cache_dir else None
-        # Train transforms are random (crops/flips/jitter), so caching train
-        # graphs would freeze the augmentation. Only cache them on request.
         self.graph_cache_train = graph_cache_train
+        self.graph_use_phenology = graph_use_phenology
 
-    def _make_graph_dataset(self, image_dirs, transform, training=False, cache_dir=None):
+    def _make_graph_dataset(
+        self, image_dirs, transform, training=False, cache_dir=None
+    ):
         kwargs = dict(
             transform=transform,
             dsm_transform=self.dsm_transform,
@@ -384,6 +473,8 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             graph_class_values=self.graph_class_values,
             graph_kwargs=self.graph_kwargs,
             graph_cache_dir=cache_dir,
+            graph_kdtree_radius=self.graph_kdtree_radius,
+            graph_use_phenology=self.graph_use_phenology,
         )
 
         if training:
@@ -407,12 +498,17 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             if self.graph_cache_dir and self.graph_cache_train:
                 train_cache = self.graph_cache_dir / "train"
             self.train_dataset = self._make_graph_dataset(
-                self.image_dirs.train, self.transform_train, training=True,
+                self.image_dirs.train,
+                self.transform_train,
+                training=True,
                 cache_dir=train_cache,
             )
             self.val_dataset = self._make_graph_dataset(
-                self.image_dirs.val, self.transform_val,
-                cache_dir=self.graph_cache_dir / "val" if self.graph_cache_dir else None,
+                self.image_dirs.val,
+                self.transform_val,
+                cache_dir=self.graph_cache_dir / "val"
+                if self.graph_cache_dir
+                else None,
             )
 
             if self.weighted_sampling:
@@ -424,29 +520,35 @@ class NeophyteGraphDataModule(NeophyteDataModule):
 
         if stage in ("test", None):
             self.test_dataset = self._make_graph_dataset(
-                self.image_dirs.test, self.transform_test,
-                cache_dir=self.graph_cache_dir / "test" if self.graph_cache_dir else None,
+                self.image_dirs.test,
+                self.transform_test,
+                cache_dir=self.graph_cache_dir / "test"
+                if self.graph_cache_dir
+                else None,
             )
 
     def _get_loader_kwargs(self, shuffle=False, sampler=None, batch_size=None):
         """Get DataLoader kwargs with proper multiprocessing support."""
         bs = batch_size if batch_size is not None else self.batch_size_train
         kwargs = {
-            'batch_size': bs,
-            'num_workers': self.num_workers,
-            'persistent_workers': self.num_workers > 0,
-            'pin_memory': False,
-            'shuffle': shuffle and sampler is None,
+            "batch_size": bs,
+            "num_workers": self.num_workers,
+            "persistent_workers": self.num_workers > 0,
+            "pin_memory": False,
+            "shuffle": shuffle and sampler is None,
         }
-        
+
         if self.num_workers > 0:
-            kwargs['prefetch_factor'] = 2
+            kwargs["prefetch_factor"] = 2
             import sys
-            kwargs['multiprocessing_context'] = 'spawn' if sys.platform != 'linux' else 'fork'
-        
+
+            kwargs["multiprocessing_context"] = (
+                "spawn" if sys.platform != "linux" else "fork"
+            )
+
         if sampler is not None:
-            kwargs['sampler'] = sampler
-        
+            kwargs["sampler"] = sampler
+
         return kwargs
 
     def _collate_graphs(self, batch):
@@ -459,24 +561,26 @@ class NeophyteGraphDataModule(NeophyteDataModule):
             return TorchDataLoader(
                 self.train_dataset,
                 collate_fn=self._collate_graphs,
-                **self._get_loader_kwargs(sampler=self.sampler, batch_size=self.batch_size_train)
+                **self._get_loader_kwargs(
+                    sampler=self.sampler, batch_size=self.batch_size_train
+                ),
             )
         return TorchDataLoader(
             self.train_dataset,
             collate_fn=self._collate_graphs,
-            **self._get_loader_kwargs(shuffle=True, batch_size=self.batch_size_train)
+            **self._get_loader_kwargs(shuffle=True, batch_size=self.batch_size_train),
         )
 
     def val_dataloader(self):
         return TorchDataLoader(
             self.val_dataset,
             collate_fn=self._collate_graphs,
-            **self._get_loader_kwargs(batch_size=self.batch_size_val)
+            **self._get_loader_kwargs(batch_size=self.batch_size_val),
         )
 
     def test_dataloader(self):
         return TorchDataLoader(
             self.test_dataset,
             collate_fn=self._collate_graphs,
-            **self._get_loader_kwargs(batch_size=self.batch_size_test)
+            **self._get_loader_kwargs(batch_size=self.batch_size_test),
         )
