@@ -30,12 +30,10 @@ log_dir: lightning_logs
 log_path: ${log_dir}/${exp_name}
 ckpt_path: ${log_path}/checkpoints
 
-# # Qualitative figures after the test pass: for plot_num_tiles evenly spaced
-# # val/test tiles, draw [image | reference mask | segments | prediction] and
-# # save them under <graph_cache_dir>/images_<exp_name>/ (e.g. tmp/images_run_...).
+
 plot_predictions: False
 plot_num_tiles: 4
-plot_max_size: 1024  # px; the longest side of each panel stays under this
+plot_max_size: 1024\
 
 # # LaTeX rendering for the figures. Set text.usetex to false if no TeX is installed.
 matplotlib_style:

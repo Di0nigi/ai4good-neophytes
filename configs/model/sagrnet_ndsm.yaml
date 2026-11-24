@@ -21,5 +21,10 @@ graph_config:
 in_channels:
   image: 3
   ndsm: 1
+
+plot_predictions: False
+plot_num_tiles: 4
+plot_max_size: 1024
+
 model_name: SAGRNet
 encoder_name: sage_gat18

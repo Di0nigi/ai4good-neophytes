@@ -183,7 +183,7 @@ def main(cfg: DictConfig) -> None:
 
     # %% qualitative figures: image | reference | segments | prediction, for a
     # # few val/test tiles, saved next to the cached graphs
-    if cfg.get("plot_predictions", False):
+    if cfg.model.get("plot_predictions", False):
         from utils.graph_plot_utils import save_graph_predictions
 
         class_order = sorted(cfg.data.classes.keys(), key=int)
@@ -200,8 +200,8 @@ def main(cfg: DictConfig) -> None:
             class_names,
             class_colors,
             plot_dir,
-            num_tiles=cfg.get("plot_num_tiles", 4),
-            max_plot_size=cfg.get("plot_max_size", 1024),
+            num_tiles=cfg.model.get("plot_num_tiles", 4),
+            max_plot_size=cfg.model.get("plot_max_size", 1024),
         )
 
     if cfg.logger == "wandb":
