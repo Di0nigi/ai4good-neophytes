@@ -5,6 +5,7 @@ graph_data:
   graph_cache_dir: "./tmp"
 
 graph_config:
+  use_phenology: True
   use_prediction_node_label_propagation: True
   prediction_node_label_propagation_args:
     iters: 2
