@@ -24,6 +24,8 @@ def main(cfg: DictConfig) -> None:
         cfg.data.load_dtm = True
     if "ndsm" in cfg.model.in_channels:
         cfg.data.load_ndsm = True
+    if cfg.model.graph_config.get("use_phenology", False):
+        cfg.data.load_auxiliary = True
     print(OmegaConf.to_yaml(cfg))
 
     # # Imports inside main: hydra resolves the config before torch/cuda start up,
@@ -103,7 +105,8 @@ def main(cfg: DictConfig) -> None:
         graph_kwargs=cfg.model.graph_config.felzenszwalb,
         graph_cache_dir=cfg.data.get("graph_cache_dir", "./graph_cache"),
         graph_cache_train=cfg.data.get("graph_cache_train", False),
-        graph_kdtree_radius=cfg.model.graph_config.graph_kdtree_radius
+        graph_kdtree_radius=cfg.model.graph_config.graph_kdtree_radius,
+        graph_use_phenology=cfg.model.graph_config.get("use_phenology", True),
     )
 
     dataModule.prepare_data()
@@ -166,16 +169,40 @@ def main(cfg: DictConfig) -> None:
     # # (the detailed evaluation lives in test.py)
     ckpt_path = trainer.checkpoint_callback.best_model_path
     print("ckpt_path: ", ckpt_path)
-    model = HybridResNet18GNN.load_from_checkpoint(ckpt_path, weights_only=False).to(
-        device,
+    model = HybridResNet18GNN.load_from_checkpoint(
+        ckpt_path,
+        weights_only=False,
         in_channels=in_channels,
         num_classes=cfg.model.num_classes,
         lr=cfg.model.lr,
         use_prediction_node_label_propagation=cfg.model.graph_config.use_prediction_node_label_propagation,
         prediction_node_label_propagation_args=cfg.model.graph_config.prediction_node_label_propagation_args,
-    )
+    ).to(device)
     model.eval()
     trainer.test(model=model, dataloaders=dataModule)
+
+    # %% qualitative figures: image | reference | segments | prediction, for a
+    # # few val/test tiles, saved next to the cached graphs
+    if cfg.get("plot_predictions", False):
+        from utils.graph_plot_utils import save_graph_predictions
+
+        class_order = sorted(cfg.data.classes.keys(), key=int)
+        class_names = [cfg.data.classes[i].name for i in class_order]
+        class_colors = [cfg.data.classes[i].color for i in class_order]
+        plot_dir = os.path.join(
+            cfg.data.get("graph_cache_dir", "./graph_cache"),
+            f"images_{cfg.exp_name}",
+        )
+        print(f"Saving qualitative prediction figures to {plot_dir}")
+        save_graph_predictions(
+            model,
+            dataModule,
+            class_names,
+            class_colors,
+            plot_dir,
+            num_tiles=cfg.get("plot_num_tiles", 4),
+            max_plot_size=cfg.get("plot_max_size", 1024),
+        )
 
     if cfg.logger == "wandb":
         import wandb
