@@ -7,6 +7,7 @@ graph_data:
 name: ${model.model_name}_${model.encoder_name}_nDSM
 
 graph_config:
+  use_phenology: True
   use_prediction_node_label_propagation: True
   prediction_node_label_propagation_args:
     iters: 2
