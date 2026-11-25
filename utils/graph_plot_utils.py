@@ -22,7 +22,8 @@ def save_graph_predictions(
     num_tiles=4,
     max_plot_size=1024,
 ):
-    """Draw qualitative prediction figures for a few val/test tiles."""
+    """Draw qualitative prediction figures for the first val/test tiles
+    where the model predicts a class other than the background."""
 
     device = next(model.parameters()).device
     num_classes = model.fc.out_features
@@ -61,14 +62,16 @@ def save_graph_predictions(
         if dataset is None:
             raise ValueError(f"Split '{split}' was not set up.")
 
-        indices = sorted(
-            set(np.linspace(0, len(dataset) - 1, num_tiles).astype(int).tolist())
-        )
         split_dir = os.path.join(save_dir, split)
         os.makedirs(split_dir, exist_ok=True)
-        print(f"[{split}] drawing {len(indices)} of {len(dataset)} tiles -> {split_dir}")
+        print(f"[{split}] scanning {len(dataset)} tiles for up to {num_tiles} "
+              f"with predicted non-background classes -> {split_dir}")
 
-        for idx in indices:
+        order = np.random.default_rng(0).permutation(len(dataset))
+        drawn = 0
+        for idx in order:
+            if drawn >= num_tiles:
+                break
             vis = dataset.get_visualization_sample(idx)
             graph = vis["graph"].to(device)
 
@@ -81,6 +84,9 @@ def save_graph_predictions(
                 )
 
             pred_mask = node_pred.cpu().numpy()[vis["segments"]]
+            if not np.any(pred_mask):  # only class 0 (ground) predicted
+                continue
+            drawn += 1
             image = np.clip(vis["image"] * norm_std + norm_mean, 0.0, 1.0)
 
             panels = [
@@ -115,3 +121,6 @@ def save_graph_predictions(
             fig.savefig(out_path, dpi=100, bbox_inches="tight")
             plt.close(fig)
             print(f"  saved {out_path}")
+
+        if drawn == 0:
+            print(f"[{split}] no tiles with predicted non-background classes")
