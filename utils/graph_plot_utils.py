@@ -19,7 +19,7 @@ def save_graph_predictions(
     class_colors,
     save_dir,
     splits=("val", "test"),
-    num_tiles=4,
+    num_tiles=24,
     max_plot_size=1024,
 ):
     """Draw qualitative prediction figures for the first val/test tiles
