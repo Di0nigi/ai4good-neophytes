@@ -92,7 +92,7 @@ def save_graph_predictions(
             panels = [
                 (image, "Image", cv2.INTER_AREA),
                 (class_overlay(image, vis["mask"]), "Reference", cv2.INTER_NEAREST),
-                (mark_boundaries(image, vis["segments"], color=(1, 0, 0), mode="outer"),
+                (mark_boundaries(image, vis["segments"], color=(1, 1, 0), mode="outer"),
                  "Segments", cv2.INTER_AREA),
                 (class_overlay(image, pred_mask), "Prediction", cv2.INTER_NEAREST),
             ]
