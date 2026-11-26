@@ -31,6 +31,7 @@ def _auto_data_config(exp_name: str) -> str | None:
     # more specific patterns first: a half-resolution run (_ds2) must not fall back
     # to the full-resolution test config, or it would be evaluated at the wrong scale
     patterns = [
+        (r'^np_cv(\d+)_plantnet', lambda m: f'neophytes_split_cv{m.group(1)}_test_plantnet'),
         (r'^np_cv(\d+)_ds2', lambda m: f'neophytes_split_cv{m.group(1)}_test_ds2'),
         (r'^np_cv(\d+)', lambda m: f'neophytes_split_cv{m.group(1)}_test'),
         (r'^np_loc', lambda _: 'neophytes_split_local_test'),
@@ -122,8 +123,10 @@ def main(cfg: DictConfig) -> None:
     OmegaConf.resolve(cfg)  # test_path interpolates ckpt_type, so resolve again
 
     model = SegmentationModel.load_from_checkpoint(ckpt_path, weights_only=False).to(device)
-    # # evaluate on whole tiles: patching was a training-time constraint of the encoder
-    model.set_patch_2_img_size(False)
+    # Existing CNN/MiT experiments keep their historical whole-tile evaluation.
+    # ViT-L needs patching for 2048px tiles because attention memory is quadratic.
+    if model.hparams.model != 'PlantNetLinear':
+        model.set_patch_2_img_size(False)
     print('Model loaded successfully.')
 
     # # class names/colors in class-index order, plus the display order for the plots

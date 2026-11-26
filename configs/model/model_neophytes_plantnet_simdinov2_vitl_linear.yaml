@@ -1,0 +1,12 @@
+# Frozen Pl@ntNet SimDINOv2 ViT-L/16 with a trainable per-patch 1x1 probe.
+defaults:
+  - model
+
+name: PlantNet_SimDINOv2_ViTL_linear
+model_name: PlantNetLinear
+encoder_name: PlantNet/simdinov2-vit-large-pn22m-in1k
+in_channels:
+  image: 3
+fusion_mode: concat
+patch_2_img_size: True
+precision: 'bf16-mixed'

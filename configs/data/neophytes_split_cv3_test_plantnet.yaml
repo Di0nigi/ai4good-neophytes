@@ -1,0 +1,17 @@
+# CV3 test split with PlantNet normalization. Whole 2048px tiles are internally
+# split into 512px patches by the model and stitched before metric computation.
+defaults:
+  - data
+  - neophytes_names_colors
+  - split_cv3
+  - transforms_512_plantnet
+
+data_name: 'np_cv3_plantnet'
+load_auxiliary: True
+load_dsm: False
+load_dtm: False
+load_ndsm: False
+citizen_cutouts_csv: null
+weighted_sampling: False
+batch_size_test: 1
+num_workers: 8

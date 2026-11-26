@@ -1,0 +1,33 @@
+# Orthophoto inference for the PlantNet SimDINOv2 ViT-L linear probe.
+# Usage:
+#   python inference.py --config-name inference_plantnet exp_name=<run> \
+#     'data.image_dir=[/path/to/orthophoto.tif]'
+
+exp_name: ???
+log_dir: lightning_logs
+ckpt_dir: ${log_dir}/${exp_name}/checkpoints
+out_dir: inference
+
+data:
+  image_dir:
+    - '../data/Neophytes/2024/Basel_1_2/2024_06_25_Basel_1_2.tif'
+
+  # Match the training crop so the external orthophoto tiler feeds one ViT window
+  # per forward pass. The checkpoint also retains internal patching as a safeguard.
+  patch_size: 512
+  patch_overlap: 64
+  batch_size: 1
+  num_workers: 8
+  nodata: 255
+
+  test_transforms:
+    - type: Normalize
+      params:
+        mean: [0.442, 0.469, 0.326]
+        std: [0.235, 0.221, 0.232]
+
+blending: hard_crop
+uncertainty: False
+
+model:
+  ckpt_type: 'best'

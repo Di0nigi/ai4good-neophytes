@@ -1,0 +1,89 @@
+# 512px crops at the original drone resolution, normalized with the statistics
+# used by PlantNet/simdinov2-vit-large-pn22m-in1k.
+crop_size_train: 512
+crop_size_train_tuple:
+  - ${data.crop_size_train}
+  - ${data.crop_size_train}
+interpolation: 2
+norm_mean: [0.442, 0.469, 0.326]
+norm_std: [0.235, 0.221, 0.232]
+
+train_transforms:
+  - type: TargetedRandomResizedCrop
+    params:
+      p: 1.0
+      size: ${data.crop_size_train_tuple}
+      scale: [0.050, 0.075]
+      ratio: [0.95, 1.05]
+      interpolation: ${data.interpolation}
+      targeted_prob: 0.95
+      anchor_mode: spatial
+      ignore_index: ${data.ignore_index}
+  - type: ColorJitter
+    params:
+      p: 0.5
+      brightness: 0.2
+      contrast: 0.2
+      saturation: 0.2
+      hue: 0.1
+  - type: CLAHE
+    params:
+      p: 0.5
+      clip_limit: 2
+  - type: RandomRotate90
+    params:
+      p: 1.0
+  - type: HorizontalFlip
+    params:
+      p: 0.5
+  - type: Normalize
+    params:
+      mean: ${data.norm_mean}
+      std: ${data.norm_std}
+
+val_transforms:
+  - type: Normalize
+    params:
+      mean: ${data.norm_mean}
+      std: ${data.norm_std}
+
+test_transforms:
+  - type: Normalize
+    params:
+      mean: ${data.norm_mean}
+      std: ${data.norm_std}
+
+# Retained for compatibility with the shared DataModule. PlantNetLinear uses RGB
+# only, so these transforms are not invoked by the dedicated experiment config.
+dsm_transforms:
+  - type: Resize
+    params:
+      height: 2048
+      width: 2048
+      interpolation: 1
+      p: 1.0
+  - type: Normalize
+    params:
+      mean: 450
+      std: 50
+      max_pixel_value: 1.0
+
+ndsm_transforms:
+  - type: Resize
+    params:
+      height: 2048
+      width: 2048
+      interpolation: 1
+      p: 1.0
+  - type: Normalize
+    params:
+      mean: 1.43
+      std: 3.10
+      max_pixel_value: 1.0
+
+transforms_additional_targets:
+  canopy: mask
+  phenology: mask
+  dsm: float_mask
+  dtm: float_mask
+  ndsm: float_mask

@@ -1,0 +1,19 @@
+# Dedicated CV3 training setup for the frozen PlantNet SimDINOv2 ViT-L probe.
+defaults:
+  - data
+  - neophytes_names_colors
+  - split_cv3
+  - transforms_512_plantnet
+
+data_name: 'np_cv3_plantnet'
+load_auxiliary: False
+load_dsm: False
+load_dtm: False
+load_ndsm: False
+# SamNeophyteDataModule is now the shared training loader. The PlantNet linear
+# probe consumes only image/mask, so do not build unused citizen support tensors.
+citizen_cutouts_csv: null
+batch_size_train: 2
+batch_size_val: 1
+batch_size_test: 1
+num_workers: 8

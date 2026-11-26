@@ -118,21 +118,31 @@ class SegmentationModel(pl.LightningModule):
             # Default: concatenate all channels as input
             num_channels = sum(in_channels.values())
 
-        # # Load model architecture
+        # # Load model architecture. PlantNetLinear is deliberately kept outside
+        # # SMP: it is a Hugging Face Transformers backbone, not an SMP/timm encoder.
         smp_models = {
             'Unet': smp.Unet, 'Unet++': smp.UnetPlusPlus, 'DeepLabV3+': smp.DeepLabV3Plus,
             'SegFormer': smp.Segformer, 'DPT': smp.DPT, 'UPerNet': smp.UPerNet,
             'MAnet': smp.MAnet, 'PAN': smp.PAN,
         }
-        if model not in smp_models:
+        if model == 'PlantNetLinear':
+            if num_channels != 3:
+                raise ValueError("PlantNetLinear supports RGB input only (3 channels).")
+            from models.plantnet_seg import FrozenPlantNetLinearSegmenter
+            self.model = FrozenPlantNetLinearSegmenter(
+                model_id=encoder_name, num_classes=num_classes
+            )
+        elif model not in smp_models:
             raise ValueError(f"Unknown model '{model}'. Available: {sorted(smp_models)} "
-                             f"(many more exist in segmentation-models-pytorch).")
-        self.model = smp_models[model](encoder_name=encoder_name, in_channels=num_channels,
-                                       classes=num_classes)
+                             f"plus PlantNetLinear (many more exist in "
+                             f"segmentation-models-pytorch).")
+        else:
+            self.model = smp_models[model](encoder_name=encoder_name, in_channels=num_channels,
+                                           classes=num_classes)
 
         # # Build elevation fusion module when using stem fusion
         self.elevation_fusion = None
-        if fusion_mode == 'stem' and aux_channels > 0:
+        if model != 'PlantNetLinear' and fusion_mode == 'stem' and aux_channels > 0:
             self.elevation_fusion = ElevationFusion(aux_channels, self.model.encoder.out_channels)
 
         # # Loss
@@ -161,10 +171,12 @@ class SegmentationModel(pl.LightningModule):
         self.hparams.patch_2_img_size = new_patch_2_img_size
 
     def configure_optimizers(self):
+        parameters = (p for p in self.parameters() if p.requires_grad) \
+            if self.hparams.model == 'PlantNetLinear' else self.parameters()
         if self.hparams.optimizer == 'Adam':
-            optimizer = optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+            optimizer = optim.Adam(parameters, lr=self.hparams.learning_rate)
         elif self.hparams.optimizer == 'AdamW':
-            optimizer = optim.AdamW(self.parameters(), lr=self.hparams.learning_rate)
+            optimizer = optim.AdamW(parameters, lr=self.hparams.learning_rate)
         else:
             raise ValueError(f"Unknown optimizer '{self.hparams.optimizer}'. Available: Adam, AdamW.")
         if self.hparams.lr_scheduler:
