@@ -1,5 +1,4 @@
-# SAM 3 with continuous dictionary-conditioned prompts and a region classifier.
-# python train.py model=model_neophytes_sam3
+# Lightning SAM3 ensemble; use with configs/train_sam3.yaml for 512 crops.
 defaults:
   - model
 
@@ -7,9 +6,15 @@ model_name: Sam3Ensemble
 encoder_name: sam3
 in_channels:
   image: 3
-  ndsm: 1  # train.py enables DSM/DTM loading and aligned nDSM transforms.
+  ndsm: 1
 sam_checkpoint: facebook/sam3
-prompt_checkpoint: HuggingFaceTB/SmolVLM-500M-Instruct
-classifier_name: resnet18
-freeze_sam: True
-freeze_prompt_generator: False
+max_proposals: 8
+height_max_m: 10.0
+threshold: 0.5
+rgb_mean: ${data.norm_mean}
+rgb_std: ${data.norm_std}
+# Undo the professor's nDSM normalization before encoding heights in [0,1].
+height_mean: 1.43
+height_std: 3.10
+loss: DiceCE
+patch_2_img_size: True

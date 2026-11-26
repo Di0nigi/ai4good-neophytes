@@ -363,10 +363,21 @@ class PromptGeneratorSam(nn.Module):
     def forward(self, X):
         enhancedIm, heightMap, textPrompt = X
 
-        imgEmb = self.clipModel.encode_image(enhancedIm)
+        # CLIP has its own image size and normalization, independent of the crop.
+        clip_size = getattr(self.clipModel.visual, 'image_size', 256)
+        if isinstance(clip_size, int):
+            clip_size = (clip_size, clip_size)
+        normalizer = next(t for t in self.clipPreprocess.transforms if hasattr(t, 'mean') and hasattr(t, 'std'))
+        def clip_input(image):
+            image = F.interpolate(image, size=clip_size, mode='bicubic', align_corners=False)
+            mean = image.new_tensor(normalizer.mean).view(1, 3, 1, 1)
+            std = image.new_tensor(normalizer.std).view(1, 3, 1, 1)
+            return (image - mean) / std
+
+        imgEmb = self.clipModel.encode_image(clip_input(enhancedIm))
         imgEmb = imgEmb / imgEmb.norm(dim=-1, keepdim=True)
 
-        hEmb = self.clipModel.encode_image(heightMap)
+        hEmb = self.clipModel.encode_image(clip_input(heightMap))
         hEmb = hEmb / hEmb.norm(dim=-1, keepdim=True)
 
         #tokens = self.tokenizer(textPrompt).to(enhancedIm.device)
@@ -663,8 +674,19 @@ class Sam3EnsembleModel(nn.Module):
             pooler_output=prompt_embedding
         )
 
+        # The pretrained SAM encoder keeps its configured grid (normally 1008),
+        # while the classifier and its targets stay at the dataset crop size.
+        sam_size = self.sam_model.config.vision_config.image_size
+        if isinstance(sam_size, int):
+            sam_size = (sam_size, sam_size)
+        sam_images = F.interpolate(images, size=sam_size, mode='bilinear', align_corners=False)
+        processor = self.sam_processor.image_processor
+        mean = sam_images.new_tensor(processor.image_mean).view(1, 3, 1, 1)
+        std = sam_images.new_tensor(processor.image_std).view(1, 3, 1, 1)
+        sam_images = (sam_images - mean) / std
+
         sam_outputs = self.sam_model(
-            pixel_values=images,
+            pixel_values=sam_images,
             text_embeds=text_outputs,
             attention_mask=torch.ones(
                 prompt_embedding.shape[:2],
@@ -727,7 +749,8 @@ class Sam3EnsembleModel(nn.Module):
         )
 
         semantic_logits = self.classifier(
-            images,
+            (images - images.new_tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+            / images.new_tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1),
             sam_masks
         )
 

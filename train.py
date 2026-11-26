@@ -59,7 +59,15 @@ def main(cfg: DictConfig) -> None:
     dsm_transforms = get_transforms(cfg.data.dsm_transforms, toTensor=False)
     ndsm_transforms = get_transforms(cfg.data.ndsm_transforms, toTensor=False)
 
-    dataModule = SamNeophyteDataModule(cfg.data.image_dir,
+    data_module_class = SamNeophyteDataModule
+    citizen_kwargs = {key: cfg.data[key] for key in (
+        'citizen_cutouts_csv', 'citizen_k', 'citizen_cache', 'citizen_max_gsd_ratio',
+        'citizen_min_mask_cov', 'citizen_max_border_touch')}
+    if cfg.model.model_name == 'Sam3Ensemble':
+        from datasets.neophyte_datamodule import NeophyteDataModule
+        data_module_class = NeophyteDataModule
+        citizen_kwargs = {}
+    dataModule = data_module_class(cfg.data.image_dir,
                                     cfg.data.classes,
                                     train_transforms,
                                     val_transforms,
@@ -90,12 +98,7 @@ def main(cfg: DictConfig) -> None:
                                     batch_size_val=cfg.data.batch_size_val,
                                     batch_size_test=cfg.data.batch_size_test,
                                     num_workers=cfg.data.num_workers,
-                                    citizen_cutouts_csv=cfg.data.citizen_cutouts_csv,
-                                    citizen_k=cfg.data.citizen_k,
-                                    citizen_cache=cfg.data.citizen_cache,
-                                    citizen_max_gsd_ratio=cfg.data.citizen_max_gsd_ratio,
-                                    citizen_min_mask_cov=cfg.data.citizen_min_mask_cov,
-                                    citizen_max_border_touch=cfg.data.citizen_max_border_touch,)
+                                    **citizen_kwargs)
 
     dataModule.prepare_data()
     dataModule.setup()
@@ -111,11 +114,11 @@ def main(cfg: DictConfig) -> None:
     model_class = SegmentationModel
     model_kwargs = {}
     if cfg.model.model_name == 'Sam3Ensemble':
-        from models.sam3_model import Sam3EnsembleModel
-        model_class = Sam3EnsembleModel
+        from models.sam3_plm import Sam3SegmentationModel
+        model_class = Sam3SegmentationModel
         model_kwargs = {key: cfg.model[key] for key in (
-            'sam_checkpoint', 'prompt_checkpoint', 'classifier_name',
-            'freeze_sam', 'freeze_prompt_generator')}
+            'sam_checkpoint', 'max_proposals', 'height_max_m', 'threshold',
+            'rgb_mean', 'rgb_std', 'height_mean', 'height_std')}
     model = model_class(cfg.model.model_name,
                               cfg.model.encoder_name,
                               cfg.model.img_size,
@@ -142,16 +145,17 @@ def main(cfg: DictConfig) -> None:
                          callbacks=callbacks,
                          logger=logger,
                          deterministic=cfg.deterministic_train,
-                         check_val_every_n_epoch=cfg.model.check_val_every_n_epoch)
+                         check_val_every_n_epoch=cfg.model.check_val_every_n_epoch,
+                         **OmegaConf.to_container(cfg.get('trainer', OmegaConf.create({})), resolve=True))
 
     # # resume an interrupted run: same exp_name -> same folder -> picks up last.ckpt
     last_ckpt_path = os.path.join(cfg.log_path, 'checkpoints/last.ckpt')
     if os.path.exists(last_ckpt_path):
         print(f'Loading weights from: {last_ckpt_path}')
-        model = model_class.load_from_checkpoint(last_ckpt_path, weights_only=False).to(device)
+        print('Resuming model, optimizer, scheduler and epoch from last.ckpt')
 
     start_time = time.time()
-    trainer.fit(model, dataModule)
+    trainer.fit(model, dataModule, ckpt_path=last_ckpt_path if os.path.exists(last_ckpt_path) else None)
     print('Training finished. Elapsed Time:', round((time.time() - start_time) / 60, 2), 'min')
 
     # %% quick test-set pass with the best checkpoint

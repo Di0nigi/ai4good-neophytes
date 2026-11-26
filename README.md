@@ -426,3 +426,104 @@ and batch losses with flushed output. Batch loss is logged from the first batch,
 then every `--wandb-log-every` batches (default 10); use 1 to log every batch.
 Batch and epoch charts have separate step axes. Epoch aggregate metrics still
 appear only after training and validation complete.
+
+## SAM3 through the professor's Lightning pipeline (512 crops)
+
+The new `models/sam3_plm.py::Sam3SegmentationModel` connects the ensemble to
+`train.py`, the standard data module, Hydra, Lightning automatic optimization,
+W&B, LR scheduling, early stopping, and `val_f1` best/last checkpoints.
+The old `trainSam3.py` / `evalSam3.py` remain legacy entry points; they do not
+read the new Hydra config or load the new Lightning checkpoint format.
+
+Authenticate on the cluster using the account with SAM3 access, then train:
+
+```bash
+hf auth login
+python -u train.py --config-name train_sam3
+```
+
+This selects fold 3's `neophytes_split_cv3_train_512` config: targeted 512 crops
+at the original ground resolution, RGB augmentation, height transforms, class
+mapping, and the professor's weighted sampler. It does not downsample entire
+tiles to 512. The preset uses batch size 2 for training and 1 for validation/test,
+8 proposals, and the base model's mixed precision. Override as usual:
+
+```bash
+python -u train.py --config-name train_sam3 data.batch_size_train=4 model.max_epochs=30
+```
+
+A small end-to-end GPU smoke run (including the post-training test pass):
+
+```bash
+python -u train.py --config-name train_sam3 model.max_epochs=1 \
+  data.num_workers=0 trainer.limit_train_batches=1 \
+  trainer.limit_val_batches=1 trainer.limit_test_batches=1
+```
+
+Data paths and stats retain the same conventions as `train.py`; apply the same
+local/server path overrides you use for the professor's baseline. To change a
+fold, select its corresponding 512 data config. W&B uses the existing training
+logger. `hf auth login` is separate from W&B login; the Hydra entry point has no
+`--hf-login` flag.
+
+### Architecture and training behavior
+
+- RGB and nDSM supplied by the standard data module are standardized. The wrapper
+  reverses that normalization before branch-specific preprocessing. Height
+  normalization parameters default to the existing configs' mean 1.43/std 3.10;
+  change `model.height_mean` / `model.height_std` if changing those transforms.
+- CLIP receives its own configured image resolution and pretrained normalization.
+  Its frozen layers stay in eval mode, including during Lightning training.
+- SAM3 receives its configured image resolution (normally 1008) and processor
+  normalization. The learned prompt stays differentiable through frozen SAM3.
+- Proposals return to the 512 crop grid. The classifier receives ImageNet-normalized
+  RGB and produces binary logits at that grid. The classifier is still the current
+  MobileNet architecture in `sam3_model.py`.
+- One prompt is trained per input tile to avoid multiplying a GPU batch by six.
+  Alternating tile/step positions use a randomly chosen present species; other
+  positions draw uniformly from all six species, providing absent-species negatives.
+  Background-only tiles receive a species prompt with an empty target. This changes
+  the old positive-species expansion policy. Binary cross entropy plus per-sample
+  smoothed Dice handles ignored pixels and empty foreground. Train loss describes
+  these sampled prompts; val/test loss averages all six prompts.
+- Optimizers contain trainable parameters only. Lightning handles backward,
+  optimizer steps, mixed precision, epoch display and logging. Resuming with the
+  same `exp_name` restores optimizer/scheduler/epoch state via `Trainer.fit`.
+
+### Evaluation
+
+```bash
+python test.py exp_name=<Lightning run directory name>
+```
+
+`test.py` detects SAM from the checkpoint's saved hyperparameters, loads the
+Lightning class, and uses the professor's existing metrics, breakdowns and
+prediction figures. Full tiles are processed in non-overlapping 512 patches,
+with replicated padding for partial edge patches, then stitched and cropped to
+original dimensions. SAM's internal input remains 1008; it is not a 512 SAM encoder.
+This preserves crop scale but can produce patch seams and is expensive: six SAM
+passes per patch, processed sequentially to bound memory.
+
+For every patch all six species are prompted independently of the labels. The
+highest binary foreground probability wins; scores at or below
+`model.threshold` (default 0.5) become nothing. Lightning `val_f1` / `test_f1` and
+IoU average species only, excluding species absent from both labels/predictions;
+background false positives still count. Ignored pixels do not enter these metrics.
+The evaluation-utils forward interface returns seven normalized comparison scores
+(six foreground scores plus a constant threshold channel), preserving this argmax.
+These are comparison scores rather than calibrated multiclass probabilities;
+AUROC/entropy outputs from the general evaluator should be interpreted accordingly.
+
+The new Lightning `.ckpt` files are a different format from legacy standalone
+`.pth` files and cannot directly resume their optimizer state. Use a new experiment
+name for the changed preprocessing and prompt-sampling policy.
+
+### Verification limits
+
+Eight CPU tests cover adapter loss/gradients, empty/ignored targets, normalization,
+all-species evaluation without ground-truth prompt selection, background false
+positives, arbitrary-size tiled output, frozen eval modes, and the core
+512-to-1008-to-512 shape contract. Lightning/model packages are unavailable in the
+local Python environment, so these use lightweight stand-ins. A real Hydra/Trainer
+run, pretrained downloads, GPU mixed precision, and dataset loading must be checked
+with the cluster smoke command above. No full pretrained training run is claimed.

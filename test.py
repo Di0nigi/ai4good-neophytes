@@ -81,6 +81,34 @@ def main(cfg: DictConfig) -> None:
     if cfg.pl_seed:
         seed_everything(cfg.pl_seed, workers=True)
 
+    # %% checkpoint
+    ckpts_paths = sorted(getListOfFiles(cfg.ckpt_path), key=natural_keys)
+    matched = [s for s in ckpts_paths if cfg.ckpt_type in s]
+    if not matched:
+        matched = [s for s in ckpts_paths if 'last' in s]
+        if not matched:
+            raise FileNotFoundError(f"No checkpoint matching '{cfg.ckpt_type}' (or 'last') in {cfg.ckpt_path}")
+        print(f"[test.py] WARNING: no '{cfg.ckpt_type}' checkpoint found, falling back to 'last'")
+    ckpt_path = matched[-1]
+    print('ckpt_path: ', ckpt_path)
+
+    # # keep the epoch number in the output folder name (best_epoch=42 rather than best)
+    cfg.ckpt_type = os.path.splitext(os.path.basename(ckpt_path))[0]
+    OmegaConf.resolve(cfg)  # test_path interpolates ckpt_type, so resolve again
+
+    saved = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+    is_sam = saved.get('hyper_parameters', {}).get('model') == 'Sam3Ensemble'
+    del saved
+    model_class = SegmentationModel
+    if is_sam:
+        from models.sam3_plm import Sam3SegmentationModel
+        model_class = Sam3SegmentationModel
+        cfg.data.load_ndsm = True
+    model = model_class.load_from_checkpoint(ckpt_path, weights_only=False).to(device)
+    # # evaluate on whole tiles: patching was a training-time constraint of the encoder
+    model.set_patch_2_img_size(False)
+    print('Model loaded successfully.')
+
     # %% data -- no augmentation, no weighted sampling, no few-shot filtering
     test_transforms = get_transforms(cfg.data.test_transforms, cfg.data.transforms_additional_targets)
     dsm_transforms = get_transforms(cfg.data.dsm_transforms, toTensor=False)
@@ -105,26 +133,6 @@ def main(cfg: DictConfig) -> None:
 
     batch = next(iter(dataModule.test_dataloader()))
     print('Image batch shape: ', batch['image'].shape, '\nMask batch shape:  ', batch['mask'].shape)
-
-    # %% checkpoint
-    ckpts_paths = sorted(getListOfFiles(cfg.ckpt_path), key=natural_keys)
-    matched = [s for s in ckpts_paths if cfg.ckpt_type in s]
-    if not matched:
-        matched = [s for s in ckpts_paths if 'last' in s]
-        if not matched:
-            raise FileNotFoundError(f"No checkpoint matching '{cfg.ckpt_type}' (or 'last') in {cfg.ckpt_path}")
-        print(f"[test.py] WARNING: no '{cfg.ckpt_type}' checkpoint found, falling back to 'last'")
-    ckpt_path = matched[-1]
-    print('ckpt_path: ', ckpt_path)
-
-    # # keep the epoch number in the output folder name (best_epoch=42 rather than best)
-    cfg.ckpt_type = os.path.splitext(os.path.basename(ckpt_path))[0]
-    OmegaConf.resolve(cfg)  # test_path interpolates ckpt_type, so resolve again
-
-    model = SegmentationModel.load_from_checkpoint(ckpt_path, weights_only=False).to(device)
-    # # evaluate on whole tiles: patching was a training-time constraint of the encoder
-    model.set_patch_2_img_size(False)
-    print('Model loaded successfully.')
 
     # # class names/colors in class-index order, plus the display order for the plots
     class_names = [cfg.data.classes[i].name for i in sorted(cfg.data.classes.keys(), key=int)]

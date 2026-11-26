@@ -1,0 +1,22 @@
+# python train.py --config-name train_sam3
+# 512 crops at original ground resolution, not whole-tile downsampling.
+defaults:
+  - train
+  - override /data: neophytes_split_cv3_train_512
+  - override /model: model_neophytes_sam3
+  - _self_
+
+data:
+  batch_size_train: 2
+  batch_size_val: 1
+  batch_size_test: 1
+  citizen_cutouts_csv: null
+
+trainer:
+  accelerator: auto
+  devices: 1
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  limit_test_batches: 1.0
