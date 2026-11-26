@@ -98,11 +98,14 @@ class SegmentationModel(pl.LightningModule):
         patch_2_img_size: if True, inputs larger than ``img_size`` are split into
             overlapping patches, pushed through the model and stitched back
             together. Needed for encoders with a fixed positional embedding.
+        patch_batch_size: optional number of extracted patches processed per model
+            call. ``None`` preserves the historical all-patches-at-once behavior.
     """
 
     def __init__(self, model, encoder_name, img_size, num_classes, learning_rate,
                  in_channels=None, ignore_index=-1, optimizer='AdamW', lr_scheduler=None,
-                 loss='CE', weight=None, patch_2_img_size=False, fusion_mode='concat'):
+                 loss='CE', weight=None, patch_2_img_size=False, fusion_mode='concat',
+                 patch_batch_size=None):
         super().__init__()
         self.save_hyperparameters()
         self.in_channels = in_channels
@@ -220,10 +223,15 @@ class SegmentationModel(pl.LightningModule):
         patches, num_patches, stride, pad = patch_image_to_batch(x, self.hparams.img_size)
         aux_patches = patch_image_to_batch(aux, self.hparams.img_size)[0] if aux is not None else None
 
-        if self.fusion_mode == 'stem':
-            output_patches = self._forward_stem(patches, aux_patches)
-        else:
-            output_patches = self.model(patches)
+        patch_batch_size = getattr(self.hparams, 'patch_batch_size', None)
+        def forward_patch_batch(patch_batch, aux_batch):
+            if self.fusion_mode == 'stem':
+                return self._forward_stem(patch_batch, aux_batch)
+            return self.model(patch_batch)
+
+        output_patches = forward_patches_in_chunks(
+            patches, aux_patches, patch_batch_size, forward_patch_batch
+        )
         return merge_output_patches_to_image(output_patches, num_patches, self.hparams.img_size,
                                              stride, batch_size, img_size, pad)
 
@@ -298,6 +306,26 @@ class SegmentationModel(pl.LightningModule):
 # =============================================================================
 # Patch-wise inference for encoders with a fixed input size
 # =============================================================================
+
+def forward_patches_in_chunks(patches, aux_patches, patch_batch_size, forward_fn):
+    """Run extracted patches in order, optionally in memory-safe micro-batches.
+
+    ``patch_batch_size=None`` intentionally performs one call with the complete
+    patch tensor, preserving the historical behavior of existing models.
+    """
+    if patch_batch_size is None:
+        return forward_fn(patches, aux_patches)
+
+    patch_batch_size = int(patch_batch_size)
+    if patch_batch_size < 1:
+        raise ValueError("patch_batch_size must be a positive integer or null.")
+
+    outputs = []
+    for start in range(0, patches.shape[0], patch_batch_size):
+        end = start + patch_batch_size
+        aux_chunk = aux_patches[start:end] if aux_patches is not None else None
+        outputs.append(forward_fn(patches[start:end], aux_chunk))
+    return torch.cat(outputs, dim=0)
 
 def compute_patch_params(img_size, patch_size, overlap_ratio=0.1):
     """Stride and padding so that patches cover the image plus a border of overlap."""

@@ -9,4 +9,7 @@ in_channels:
   image: 3
 fusion_mode: concat
 patch_2_img_size: True
+# A 2048px validation/test tile produces 25 overlapping 512px patches. Process
+# them in small chunks so ViT-L attention activations do not fill GPU memory.
+patch_batch_size: 2
 precision: 'bf16-mixed'

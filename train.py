@@ -109,7 +109,7 @@ def main(cfg: DictConfig) -> None:
 
     # %% model
     model_class = SegmentationModel
-    model_kwargs = {}
+    model_kwargs = {'patch_batch_size': cfg.model.get('patch_batch_size')}
     if cfg.model.model_name == 'Sam3Ensemble':
         from models.sam3_model import Sam3EnsembleModel
         model_class = Sam3EnsembleModel
