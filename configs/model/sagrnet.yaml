@@ -10,7 +10,6 @@ graph_config:
   prediction_node_label_propagation_args:
     iters: 2
     alpha: 0.5
-    conf_thresh: 0.7
   felzenszwalb:
     felz_scale: 100
     felz_sigma: 0.4

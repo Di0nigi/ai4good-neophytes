@@ -2,7 +2,8 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from torch.nn import BatchNorm1d, Linear, ReLU
-from torch_geometric.nn import GATConv, SAGEConv
+from torch_geometric.nn import GATv2Conv, SAGEConv
+from torch_geometric.nn.models import CorrectAndSmooth
 from torchmetrics.classification import (
     MulticlassAccuracy,
     MulticlassAUROC,
@@ -10,32 +11,52 @@ from torchmetrics.classification import (
     MulticlassJaccardIndex,
 )
 
+""" 
+Adapted SAGRNet model from https://github.com/baoling123/GCN-remote-sensing-classification
+
+Baoling Gui, Lydia Sam, Anshuman Bhardwaj, Diego Soto Gómez, Félix González Peñaloza, Manfred F. Buchroithner, David R. Green,
+SAGRNet: A novel object-based graph convolutional neural network for diverse vegetation cover classification in remotely-sensed imagery,
+ISPRS Journal of Photogrammetry and Remote Sensing,
+https://doi.org/10.1016/j.isprsjprs.2025.06.004.
+(https://www.sciencedirect.com/science/article/pii/S0924271625002308)
+
+We changed the following:
+- Updated GATConv layer to GATv2Conv
+- Added propagate node labels for test and validation
+- Added metrics train/validation loop
+"""
+
 
 @torch.no_grad()
-def propagate_node_labels(probs, edge_index, iters=2, alpha=0.5, conf_thresh=0.7):
-    """Smooth node probs over the graph; confident nodes keep their prediction."""
-    src, dst = edge_index[0], edge_index[1]
-    deg = torch.zeros(probs.size(0), device=probs.device, dtype=probs.dtype)
-    deg.index_add_(
-        0, dst, torch.ones(dst.numel(), device=probs.device, dtype=probs.dtype)
-    )
-    deg = deg.clamp(min=1.0)  # isolated nodes keep their own prob
+def propagate_node_labels(probs, edge_index, iters: int = 2, alpha: float = 0.5):
+    """Smooth per-node class probabilities over graph edges before labeling.
 
-    confident = probs.max(dim=1).values > conf_thresh
-    out = probs
-    for _ in range(iters):
-        agg = torch.zeros_like(out)
-        agg.index_add_(0, dst, out[src])  # sum of neighbor probs
-        mixed = (1 - alpha) * out + alpha * (agg / deg[:, None])
-        out = torch.where(confident[:, None], out, mixed)
-    return out.argmax(dim=1)
+    Args:
+        probs: Per-node class probabilities
+        edge_index: Graph connectivity. Edges are expected to be stored symmetrically (both directions).
+        iters: Number of propagation iterations. Each iteration spreads information one additional hop through the graph.
+        alpha: How much a node weights their neighbors -> 1 copies their mean.
+    Returns:
+        Predicted class index per node.
+    """
+    correct_and_smooth = CorrectAndSmooth(
+        num_correction_layers=1,
+        correction_alpha=1.0,
+        num_smoothing_layers=iters,
+        smoothing_alpha=alpha,
+    )
+    empty_mask = torch.zeros(probs.size(0), dtype=torch.bool, device=probs.device)
+    empty_labels = torch.empty(0, dtype=torch.long, device=probs.device)
+    return correct_and_smooth.smooth(
+        probs, empty_labels, empty_mask, edge_index
+    ).argmax(dim=1)
 
 
 class HybridResNetBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(HybridResNetBlock, self).__init__()
         self.sage_conv = SAGEConv(in_channels, out_channels)
-        self.gat_conv = GATConv(out_channels, out_channels // 4, heads=4, concat=True)
+        self.gat_conv = GATv2Conv(out_channels, out_channels // 4, heads=4, concat=True)
         self.bn1 = BatchNorm1d(out_channels)
         self.bn2 = BatchNorm1d(out_channels)
         self.relu = ReLU(inplace=False)
@@ -76,7 +97,6 @@ class HybridResNet18GNN(pl.LightningModule):
             self.prediction_node_label_propagation_args = {
                 "iters": 2,
                 "alpha": 0.5,
-                "conf_thresh": 0.7,
             }
         else:
             self.prediction_node_label_propagation_args = (
@@ -162,11 +182,15 @@ class HybridResNet18GNN(pl.LightningModule):
         return x
 
     def _shared_step(self, batch, stage):
+        """Shared training, validation and test."""
         logits = self(batch.x, batch.edge_index)
-        probs = torch.softmax(logits, dim=1)
-        preds = propagate_node_labels(
-            probs, batch.edge_index, **self.prediction_node_label_propagation_args
-        )
+        preds = torch.argmax(logits, dim=1)
+        if stage != "train" and self.use_prediction_node_label_propagation:
+            probs = torch.softmax(logits, dim=1)
+            preds = propagate_node_labels(
+                probs, batch.edge_index, **self.prediction_node_label_propagation_args
+            )
+
         valid = batch.y >= 0
 
         if not valid.any():
@@ -185,7 +209,6 @@ class HybridResNet18GNN(pl.LightningModule):
             weight=self.class_weights,
         )
 
-        preds = torch.argmax(logits, dim=1)
         batch_size = int(valid.sum())
 
         self.log(
