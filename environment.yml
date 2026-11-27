@@ -31,6 +31,7 @@ dependencies:
       - pyg_lib
       - torch_scatter
       - torch_sparse
+      - torch-geometric
       - timm==1.0.19
       - huggingface_hub<1.0  # timm downloads the pretrained encoder weights through it
       - albumentations==2.0.8
