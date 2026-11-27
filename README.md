@@ -324,3 +324,105 @@ Swapping one line of a `defaults` list is therefore a whole experiment: the five
   hides false positives on empty ground.
 
 ---
+
+## SAM3 ensemble evaluation
+
+Run the trained binary prompt-conditioned ensemble on all six species per tile:
+
+```bash
+python evalSam3.py \
+  --checkpoint checkpoints/sam3/sam3_checkpoint_best.pth \
+  --device cuda \
+  --threshold 0.5 \
+  --output-dir outputs/sam3_eval
+```
+
+Add `--hf-login` for the hidden token prompt if needed. Specify dataset folders
+with `--test-dirs /data/site/test ...`, or use `--paths-file subset_paths.yaml`
+with an `image_dir.test` list. Without either, the script tries the downloaded
+subset paths and then `configs/data/split_local.yaml`. Relative paths use the
+repository directory. Use the same split convention as the training experiment;
+a checkpoint does not establish that a proposed test folder was held out.
+
+Image size, height scaling limit, SAM backbone identifier, and proposal count
+are taken from the checkpoint's configuration unless explicitly overridden.
+Evaluation reuses the training script's deterministic RGB/nDSM preprocessing.
+It never calls the model's ground-truth-dependent `prepare_inputs` method.
+
+For each species, scores are `softmax(binary_logits)[:, 1]`. The combined map
+selects the species with the largest score at each pixel. If that winning score
+is below `--threshold` (default 0.5), the pixel gets ID 0 (nothing); otherwise it
+gets species ID 1–6. Ties select the lowest species ID. Setting the threshold to
+0 disables rejection. These are independently learned binary probabilities,
+not a joint calibrated six-class distribution or SAM proposal scores. Select
+any alternative threshold on validation data (`--split val`), then keep it
+fixed for test evaluation.
+
+Prompts run sequentially, with gradients disabled, so the GPU batch is not
+expanded sixfold. `--max-batches 1 --no-save-maps` provides a short smoke run.
+A smoke run reports metrics for only the processed subset.
+
+Outputs:
+
+- `metrics.json`: per-species and macro precision, recall, IoU, F1, confusion
+  matrix (rows=true, columns=predicted), evaluated tile count, and settings.
+- `per_species.csv`: the six species' metrics and TP/FP/FN pixel counts.
+- `maps/000000_labels.png`: combined IDs 0–6 for each tile.
+- `maps/000000_confidence.pt`: winning foreground probabilities, including on
+  rejected pixels, saved as a CPU tensor.
+- `maps/000000_color.png`: color previews for the first `--save-previews` tiles
+  (default 10); black means nothing.
+- `manifest.json`: the mapping from numeric output IDs to source image paths.
+
+`--no-save-maps` writes metrics only. Background is excluded from macro means,
+but species predictions on background count as false positives. Values -1,
+254, and 255 are excluded from metrics; their predicted map pixels are still
+saved. Undefined ratios are JSON null / blank CSV cells and excluded from the
+corresponding macro mean; the JSON records how many species contributed.
+All metrics and output maps use the resized input grid (normally 1008 × 1008),
+not the original tile resolution. PNGs have no geographic metadata.
+
+### W&B logging for SAM3 training
+
+Training logs to W&B online by default; no logging flag is needed:
+
+```bash
+wandb login
+python trainSam3.py --wandb-project sam3-neophytes --wandb-name experiment-1
+```
+
+Append your usual data, device, and Hugging Face options. Use `--wandb-entity`
+for a specific username/team. Authentication uses your existing W&B login or
+`WANDB_API_KEY`; the script does not put API keys in its logged configuration
+or checkpoints. `wandb` is already listed in `environment.yml`.
+
+For a compute node without internet:
+
+```bash
+python trainSam3.py --wandb-mode offline
+```
+
+Local W&B files are stored under the chosen checkpoint output directory.
+They can be uploaded later using `wandb sync <offline-run-directory>`.
+Online syncing is the default even if `WANDB_MODE` was previously set.
+Use `--wandb-mode offline` explicitly for local-only recording.
+
+Each completed epoch logs `train/loss`, `val/loss`, `train/learning_rate`,
+`val/best_loss`, and `time/epoch_seconds`. Run configuration includes CLI
+settings, resolved dataset folders, split sizes, and trainable parameter count.
+The best validation loss and its epoch are also recorded in the run summary.
+The run closes on normal completion or a training exception. Model weights
+continue to be saved locally; this integration does not upload checkpoints or
+add model/gradient watching. The old `--wandb` flag is accepted for compatibility
+but no longer needed. W&B startup information is quieted; actual errors and
+warnings remain visible. `train.py` already defaults to W&B via its config and
+now uses the same quiet settings with online syncing. Its explicit `logger=csv`
+override remains available.
+`--check-data` does not start a W&B run.
+
+W&B starts before pretrained model loading, and the terminal prints the effective
+mode, local log directory, and online run URL. Training prints stage transitions
+and batch losses with flushed output. Batch loss is logged from the first batch,
+then every `--wandb-log-every` batches (default 10); use 1 to log every batch.
+Batch and epoch charts have separate step axes. Epoch aggregate metrics still
+appear only after training and validation complete.
