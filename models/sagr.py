@@ -2,7 +2,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
 from torch.nn import BatchNorm1d, Linear, ReLU
-from torch_geometric.nn import GATv2Conv, SAGEConv
+from torch_geometric.nn import GATConv, SAGEConv
 from torch_geometric.nn.models import CorrectAndSmooth
 from torchmetrics.classification import (
     MulticlassAccuracy,
@@ -56,7 +56,7 @@ class HybridResNetBlock(torch.nn.Module):
     def __init__(self, in_channels, out_channels):
         super(HybridResNetBlock, self).__init__()
         self.sage_conv = SAGEConv(in_channels, out_channels)
-        self.gat_conv = GATv2Conv(out_channels, out_channels // 4, heads=4, concat=True)
+        self.gat_conv = GATConv(out_channels, out_channels // 4, heads=4, concat=True)
         self.bn1 = BatchNorm1d(out_channels)
         self.bn2 = BatchNorm1d(out_channels)
         self.relu = ReLU(inplace=False)
