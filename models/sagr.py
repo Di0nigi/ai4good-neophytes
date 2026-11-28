@@ -93,6 +93,7 @@ class HybridResNet18GNN(pl.LightningModule):
         super(HybridResNet18GNN, self).__init__()
         self.save_hyperparameters(ignore=["class_weights"])
         self.lr = lr
+        self.use_prediction_node_label_propagation = use_prediction_node_label_propagation
         if prediction_node_label_propagation_args is None:
             self.prediction_node_label_propagation_args = {
                 "iters": 2,
