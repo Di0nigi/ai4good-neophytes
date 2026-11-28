@@ -6,7 +6,6 @@ import os
 from pathlib import Path
 
 import numpy as np
-import rasterio
 import torch
 from skimage.measure import regionprops
 from skimage.segmentation import felzenszwalb
@@ -18,26 +17,17 @@ from torch_geometric.data import Batch, Data
 from datasets.neophyte_datamodule import NeophyteDataModule
 from datasets.neophyte_dataset import NeophyteDataset
 
+""" 
+Custom data modules adapted from the original data modules from the repository. 
+Key extensions:
+- Graph format 
+- Node feature extraction
+- Graph generation (either kdtree with radius or neighbor edge creation)
+- Additional function to sample images from dataset
+"""
+
+
 GRAPH_CACHE_VERSION = "3"
-
-
-def read_aligned_raster(path, reference, bands=None):
-    """Read a raster and check that it matches the image tile's grid."""
-    with rasterio.open(path) as src:
-        if (
-            src.height != reference.height
-            or src.width != reference.width
-            or src.transform != reference.transform
-            or src.crs != reference.crs
-        ):
-            raise ValueError(f"{path} is not aligned with the image tile.")
-
-        if bands is None:
-            arr = src.read(masked=True).astype(np.float32).filled(np.nan)
-        else:
-            arr = src.read(bands, masked=True).astype(np.float32).filled(np.nan)
-
-    return arr
 
 
 def extract_node_features(image, segments, extra_rasters):
